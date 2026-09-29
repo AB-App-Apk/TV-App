@@ -22,6 +22,7 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import androidx.core.content.ContextCompat
 import androidx.core.graphics.drawable.toBitmap
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
@@ -35,6 +36,7 @@ import java.time.format.DateTimeFormatter
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        ContextCompat.startForegroundService(this, Intent(this, RemoteService::class.java))
         setContent {
             MaterialTheme(colorScheme = darkColorScheme()) { HomeScreen() }
         }
@@ -72,6 +74,9 @@ fun HomeScreen() {
                 DashCard("Storage", status.storage, "Free space", Modifier.weight(1f)) {
                     openSettings(ctx, Settings.ACTION_INTERNAL_STORAGE_SETTINGS)
                 }
+                DashCard("Phone remote", "PIN ${pin(ctx)}", localIp(ctx), Modifier.weight(1f)) {
+                    openSettings(ctx, Settings.ACTION_ACCESSIBILITY_SETTINGS)
+                }
             }
         }
         item(span = { GridItemSpan(maxLineSpan) }) {
@@ -80,4 +85,3 @@ fun HomeScreen() {
         items(apps, key = { it.pkg }) { app -> AppCard(app) }
     }
 }
-
