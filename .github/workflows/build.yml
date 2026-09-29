@@ -19,17 +19,23 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: 8.9
-      - name: Build debug APK
-        run: gradle :app:assembleDebug --no-daemon
-      - name: Rename APK
-        run: cp app/build/outputs/apk/debug/app-debug.apk TvDash.apk
+      - name: Build debug APKs
+        run: gradle :app:assembleDebug :remote:assembleDebug --no-daemon
+      - name: Rename APKs
+        run: |
+          cp app/build/outputs/apk/debug/app-debug.apk TvDash.apk
+          cp remote/build/outputs/apk/debug/remote-debug.apk TvRemote.apk
       - uses: actions/upload-artifact@v4
         with:
-          name: TvDash-apk
-          path: TvDash.apk
+          name: apks
+          path: |
+            TvDash.apk
+            TvRemote.apk
       - name: Publish as a release (stable download link)
         uses: softprops/action-gh-release@v2
         with:
           tag_name: latest
           name: Latest build
-          files: TvDash.apk
+          files: |
+            TvDash.apk
+            TvRemote.apk
