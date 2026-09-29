@@ -1,0 +1,83 @@
+package com.example.tvdash
+
+import android.content.Context
+import android.content.Intent
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
+import android.os.Bundle
+import android.os.Environment
+import android.os.StatFs
+import android.provider.Settings
+import androidx.activity.ComponentActivity
+import androidx.activity.compose.setContent
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.grid.*
+import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.unit.dp
+import androidx.core.graphics.drawable.toBitmap
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LifecycleEventEffect
+import androidx.tv.material3.*
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.withContext
+import java.time.LocalDateTime
+import java.time.format.DateTimeFormatter
+
+class MainActivity : ComponentActivity() {
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        setContent {
+            MaterialTheme(colorScheme = darkColorScheme()) { HomeScreen() }
+        }
+    }
+}
+
+
+@Composable
+fun HomeScreen() {
+    val ctx = LocalContext.current
+    var apps by remember { mutableStateOf<List<AppEntry>>(emptyList()) }
+    var reload by remember { mutableIntStateOf(0) }
+    LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { reload++ }
+    LaunchedEffect(reload) { apps = withContext(Dispatchers.IO) { loadApps(ctx) } }
+
+    val status by produceState(readStatus(ctx)) {
+        while (true) { delay(1000); value = readStatus(ctx) }
+    }
+
+    LazyVerticalGrid(
+        columns = GridCells.Adaptive(200.dp),
+        contentPadding = PaddingValues(48.dp),
+        horizontalArrangement = Arrangement.spacedBy(20.dp),
+        verticalArrangement = Arrangement.spacedBy(20.dp),
+        modifier = Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)
+    ) {
+        item(span = { GridItemSpan(maxLineSpan) }) {
+            Row(horizontalArrangement = Arrangement.spacedBy(20.dp), modifier = Modifier.fillMaxWidth()) {
+                DashCard("Time", status.time.format(DateTimeFormatter.ofPattern("h:mm a")),
+                    status.time.format(DateTimeFormatter.ofPattern("EEEE, MMM d")),
+                    Modifier.weight(1f)) { openSettings(ctx, Settings.ACTION_DATE_SETTINGS) }
+                DashCard("Network", status.network, "Tap for settings", Modifier.weight(1f)) {
+                    openSettings(ctx, Settings.ACTION_WIFI_SETTINGS)
+                }
+                DashCard("Storage", status.storage, "Free space", Modifier.weight(1f)) {
+                    openSettings(ctx, Settings.ACTION_INTERNAL_STORAGE_SETTINGS)
+                }
+            }
+        }
+        item(span = { GridItemSpan(maxLineSpan) }) {
+            Text("Apps", style = MaterialTheme.typography.headlineSmall, modifier = Modifier.padding(top = 12.dp))
+        }
+        items(apps, key = { it.pkg }) { app -> AppCard(app) }
+    }
+}
+
