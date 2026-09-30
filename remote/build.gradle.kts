@@ -4,6 +4,8 @@ plugins {
     id("org.jetbrains.kotlin.plugin.compose")
 }
 
+val buildNo = (project.findProperty("buildNumber") as String?)?.toIntOrNull() ?: 1
+
 android {
     namespace = "com.example.tvremote"
     compileSdk = 34
@@ -11,8 +13,21 @@ android {
         applicationId = "com.example.tvremote"
         minSdk = 26
         targetSdk = 34
-        versionCode = 1
-        versionName = "1.0"
+        versionCode = buildNo
+        versionName = "build $buildNo"
+    }
+    sourceSets.getByName("main").java.srcDir("../shared")
+    val ks = rootProject.file("release.keystore")
+    if (ks.exists()) {
+        signingConfigs {
+            create("shared") {
+                storeFile = ks
+                storePassword = "tvdash123"
+                keyAlias = "tvdash"
+                keyPassword = "tvdash123"
+            }
+        }
+        buildTypes { getByName("debug") { signingConfig = signingConfigs.getByName("shared") } }
     }
     buildFeatures { compose = true }
     compileOptions {
