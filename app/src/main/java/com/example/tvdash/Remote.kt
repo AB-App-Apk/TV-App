@@ -99,21 +99,33 @@ class RemoteService : Service() {
             appList().forEach { (n, p) -> a.put(JSONObject().put("n", n).put("p", p)) }
         }.toString()
         "/vol" -> {
-            getSystemService(AudioManager::class.java).adjustStreamVolume(
-                AudioManager.STREAM_MUSIC,
-                when (u.getQueryParameter("d")) {
-                    "up" -> AudioManager.ADJUST_RAISE
-                    "down" -> AudioManager.ADJUST_LOWER
-                    else -> AudioManager.ADJUST_TOGGLE_MUTE
-                },
-                AudioManager.FLAG_SHOW_UI
-            )
+            val am = getSystemService(AudioManager::class.java)
+            when (u.getQueryParameter("d")) {
+                "up" -> am.adjustStreamVolume(AudioManager.STREAM_MUSIC, AudioManager.ADJUST_RAISE, AudioManager.FLAG_SHOW_UI)
+                "down" -> am.adjustStreamVolume(AudioManager.STREAM_MUSIC, AudioManager.ADJUST_LOWER, AudioManager.FLAG_SHOW_UI)
+                else -> toggleMute(am)
+            }
             "ok"
         }
         "/power" -> if (u.getQueryParameter("s") == "on") { wake(); "ok" }
                     else PowerAccessibilityService.instance?.let { it.sleep(); "ok" } ?: "no-a11y"
         "/launch" -> { launch(u.getQueryParameter("pkg") ?: ""); "ok" }
         else -> "ok"
+    }
+
+    /** Mute by setting volume to 0 and restoring it later; works even when the TV ignores stream mute. */
+    private fun toggleMute(am: AudioManager) {
+        val st = AudioManager.STREAM_MUSIC
+        val sp = getSharedPreferences("tvdash", Context.MODE_PRIVATE)
+        if (am.isStreamMute(st)) am.adjustStreamVolume(st, AudioManager.ADJUST_UNMUTE, 0)
+        val cur = am.getStreamVolume(st)
+        if (cur > 0) {
+            sp.edit().putInt("prevVol", cur).apply()
+            am.setStreamVolume(st, 0, AudioManager.FLAG_SHOW_UI)
+        } else {
+            val back = sp.getInt("prevVol", am.getStreamMaxVolume(st) / 3).coerceAtLeast(1)
+            am.setStreamVolume(st, back, AudioManager.FLAG_SHOW_UI)
+        }
     }
 
     @Suppress("DEPRECATION")
@@ -140,3 +152,4 @@ class RemoteService : Service() {
             .sortedBy { it.first.lowercase() }
     }
 }
+
