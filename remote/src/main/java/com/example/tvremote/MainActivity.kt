@@ -10,10 +10,12 @@ import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
+import com.example.updater.UpdateController
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -51,6 +53,9 @@ fun RemoteScreen() {
     var msg by remember { mutableStateOf("") }
     val scope = rememberCoroutineScope()
     val noTv = "Can't reach the TV. Check the IP, PIN and Wi-Fi."
+    val upd = remember { UpdateController(ctx, "TvRemote.apk") }
+    DisposableEffect(Unit) { upd.start(); onDispose { upd.stop() } }
+    LaunchedEffect(Unit) { upd.check() }
 
     fun send(path: String) {
         scope.launch {
@@ -127,5 +132,15 @@ fun RemoteScreen() {
             TextButton(onClick = { editing = true }) { Text("Change TV") }
         }
         if (msg.isNotEmpty()) Text(msg, color = MaterialTheme.colorScheme.error)
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text(
+                upd.status.ifEmpty { "Build ${upd.installed}" },
+                style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1f)
+            )
+            OutlinedButton(
+                onClick = { scope.launch { if (upd.available) upd.update() else upd.check() } },
+                enabled = !upd.busy
+            ) { Text(if (upd.available) "Update" else "Check for updates") }
+        }
     }
 }
