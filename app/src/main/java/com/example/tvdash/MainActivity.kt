@@ -23,6 +23,8 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
+import com.example.updater.UpdateController
+import kotlinx.coroutines.launch
 import androidx.core.graphics.drawable.toBitmap
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
@@ -47,6 +49,10 @@ class MainActivity : ComponentActivity() {
 @Composable
 fun HomeScreen() {
     val ctx = LocalContext.current
+    val upd = remember { UpdateController(ctx, "TvDash.apk") }
+    val scope = rememberCoroutineScope()
+    DisposableEffect(Unit) { upd.start(); onDispose { upd.stop() } }
+    LaunchedEffect(Unit) { upd.check() }
     var apps by remember { mutableStateOf<List<AppEntry>>(emptyList()) }
     var reload by remember { mutableIntStateOf(0) }
     LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { reload++ }
@@ -80,8 +86,14 @@ fun HomeScreen() {
             }
         }
         item(span = { GridItemSpan(maxLineSpan) }) {
+            DashCard("Updates", "Build ${upd.installed}", upd.status.ifEmpty { "Select to check for updates" }, Modifier.fillMaxWidth()) {
+                if (!upd.busy) scope.launch { if (upd.available) upd.update() else upd.check() }
+            }
+        }
+        item(span = { GridItemSpan(maxLineSpan) }) {
             Text("Apps", style = MaterialTheme.typography.headlineSmall, modifier = Modifier.padding(top = 12.dp))
         }
         items(apps, key = { it.pkg }) { app -> AppCard(app) }
     }
 }
+
