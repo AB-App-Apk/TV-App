@@ -4,6 +4,8 @@ plugins {
     id("org.jetbrains.kotlin.plugin.compose")
 }
 
+val buildNo = (project.findProperty("buildNumber") as String?)?.toIntOrNull() ?: 1
+
 android {
     namespace = "com.example.tvdash"
     compileSdk = 34
@@ -11,8 +13,21 @@ android {
         applicationId = "com.example.tvdash"
         minSdk = 26
         targetSdk = 34
-        versionCode = 1
-        versionName = "1.0"
+        versionCode = buildNo
+        versionName = "build $buildNo"
+    }
+    sourceSets.getByName("main").java.srcDir("../shared")
+    val ks = rootProject.file("release.keystore")
+    if (ks.exists()) {
+        signingConfigs {
+            create("shared") {
+                storeFile = ks
+                storePassword = "tvdash123"
+                keyAlias = "tvdash"
+                keyPassword = "tvdash123"
+            }
+        }
+        buildTypes { getByName("debug") { signingConfig = signingConfigs.getByName("shared") } }
     }
     buildFeatures { compose = true }
     compileOptions {
@@ -29,5 +44,6 @@ dependencies {
     implementation("androidx.tv:tv-material:1.0.0")
     implementation("androidx.activity:activity-compose:1.9.2")
     implementation("androidx.core:core-ktx:1.13.1")
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
     implementation("androidx.lifecycle:lifecycle-runtime-compose:2.8.6")
 }
