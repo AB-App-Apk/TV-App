@@ -19,8 +19,12 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: 8.9
+      - name: Signing key and build number
+        run: |
+          base64 -d keystore.b64 > release.keystore
+          echo -n "${{ github.run_number }}" > version.txt
       - name: Build debug APKs
-        run: gradle :app:assembleDebug :remote:assembleDebug --no-daemon
+        run: gradle :app:assembleDebug :remote:assembleDebug -PbuildNumber=${{ github.run_number }} --no-daemon
       - name: Rename APKs
         run: |
           cp app/build/outputs/apk/debug/app-debug.apk TvDash.apk
@@ -31,11 +35,12 @@ jobs:
           path: |
             TvDash.apk
             TvRemote.apk
-      - name: Publish as a release (stable download link)
+      - name: Publish release (stable download link)
         uses: softprops/action-gh-release@v2
         with:
           tag_name: latest
-          name: Latest build
+          name: Build ${{ github.run_number }}
           files: |
             TvDash.apk
             TvRemote.apk
+            version.txt
