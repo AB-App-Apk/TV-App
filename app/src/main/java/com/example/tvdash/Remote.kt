@@ -12,10 +12,17 @@ import android.content.pm.ServiceInfo
 import android.media.AudioManager
 import android.net.ConnectivityManager
 import android.net.Uri
+import android.provider.Settings
 import android.os.Build
+import android.os.Bundle
 import android.os.IBinder
 import android.os.PowerManager
+import android.view.KeyEvent
 import android.view.accessibility.AccessibilityEvent
+import android.view.accessibility.AccessibilityNodeInfo
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.setValue
 import androidx.core.content.ContextCompat
 import org.json.JSONArray
 import org.json.JSONObject
@@ -26,6 +33,9 @@ import java.security.SecureRandom
 import kotlin.concurrent.thread
 
 const val PORT = 8765
+
+/** The phone's Apps button bumps this; the dashboard then scrolls to the apps grid. */
+object Nav { var appsRequest by mutableIntStateOf(0) }
 
 fun pin(ctx: Context): String {
     val sp = ctx.getSharedPreferences("tvdash", Context.MODE_PRIVATE)
@@ -47,6 +57,18 @@ class PowerAccessibilityService : AccessibilityService() {
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {}
     override fun onInterrupt() {}
     fun sleep() { performGlobalAction(GLOBAL_ACTION_LOCK_SCREEN) }
+
+    /** Types into whichever text field has input focus (e.g. a search bar). */
+    fun typeText(text: String, enter: Boolean): Boolean {
+        val node = windows.mapNotNull { it.root }.firstNotNullOfOrNull { it.findFocus(AccessibilityNodeInfo.FOCUS_INPUT) }
+            ?: rootInActiveWindow?.findFocus(AccessibilityNodeInfo.FOCUS_INPUT)
+            ?: return false
+        val args = Bundle().apply { putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, text) }
+        val ok = node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)
+        if (ok && enter && Build.VERSION.SDK_INT >= 30)
+            node.performAction(AccessibilityNodeInfo.AccessibilityAction.ACTION_IME_ENTER.id)
+        return ok
+    }
 }
 
 class BootReceiver : BroadcastReceiver() {
@@ -109,6 +131,10 @@ class RemoteService : Service() {
         }
         "/power" -> if (u.getQueryParameter("s") == "on") { wake(); "ok" }
                     else PowerAccessibilityService.instance?.let { it.sleep(); "ok" } ?: "no-a11y"
+        "/key" -> key(u.getQueryParameter("k") ?: "")
+        "/text" -> PowerAccessibilityService.instance?.let {
+            if (it.typeText(u.getQueryParameter("t") ?: "", u.getQueryParameter("enter") == "1")) "ok" else "no-field"
+        } ?: "no-a11y"
         "/launch" -> { launch(u.getQueryParameter("pkg") ?: ""); "ok" }
         else -> "ok"
     }
@@ -135,6 +161,60 @@ class RemoteService : Service() {
             .acquire(3000)
     }
 
+    /** Remote buttons. Arrow/OK use accessibility D-pad actions (Android 13+); ff/rew are media keys. */
+    private fun key(k: String): String {
+        val media = when (k) {
+            "ff" -> KeyEvent.KEYCODE_MEDIA_FAST_FORWARD
+            "rew" -> KeyEvent.KEYCODE_MEDIA_REWIND
+            else -> 0
+        }
+        if (media != 0) {
+            val am = getSystemService(AudioManager::class.java)
+            am.dispatchMediaKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, media))
+            am.dispatchMediaKeyEvent(KeyEvent(KeyEvent.ACTION_UP, media))
+            return "ok"
+        }
+        val svc = PowerAccessibilityService.instance
+        when (k) {
+            "home" -> {
+                wake()
+                if (Settings.canDrawOverlays(this)) dashboard(false)
+                else if (svc != null) svc.performGlobalAction(AccessibilityService.GLOBAL_ACTION_HOME)
+                else return "no-a11y"
+            }
+            "apps" -> {
+                if (!Settings.canDrawOverlays(this)) return "no-overlay"
+                wake(); dashboard(true)
+            }
+            "settings" -> {
+                if (!Settings.canDrawOverlays(this)) return "no-overlay"
+                wake()
+                startActivity(Intent(Settings.ACTION_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+            }
+            else -> {
+                val action = when (k) {
+                    "up" -> AccessibilityService.GLOBAL_ACTION_DPAD_UP
+                    "down" -> AccessibilityService.GLOBAL_ACTION_DPAD_DOWN
+                    "left" -> AccessibilityService.GLOBAL_ACTION_DPAD_LEFT
+                    "right" -> AccessibilityService.GLOBAL_ACTION_DPAD_RIGHT
+                    "ok" -> AccessibilityService.GLOBAL_ACTION_DPAD_CENTER
+                    else -> return "ok"
+                }
+                if (svc == null) return "no-a11y"
+                svc.performGlobalAction(action)
+            }
+        }
+        return "ok"
+    }
+
+    private fun dashboard(apps: Boolean) {
+        startActivity(
+            Intent(this, MainActivity::class.java)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+                .putExtra("apps", apps)
+        )
+    }
+
     private fun launch(pkg: String) {
         wake()
         val i = (packageManager.getLeanbackLaunchIntentForPackage(pkg)
@@ -152,4 +232,3 @@ class RemoteService : Service() {
             .sortedBy { it.first.lowercase() }
     }
 }
-
