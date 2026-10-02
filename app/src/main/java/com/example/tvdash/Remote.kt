@@ -20,9 +20,6 @@ import android.os.PowerManager
 import android.view.KeyEvent
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableIntStateOf
-import androidx.compose.runtime.setValue
 import androidx.core.content.ContextCompat
 import org.json.JSONArray
 import org.json.JSONObject
@@ -33,9 +30,6 @@ import java.security.SecureRandom
 import kotlin.concurrent.thread
 
 const val PORT = 8765
-
-/** The phone's Apps button bumps this; the dashboard then scrolls to the apps grid. */
-object Nav { var appsRequest by mutableIntStateOf(0) }
 
 fun pin(ctx: Context): String {
     val sp = ctx.getSharedPreferences("tvdash", Context.MODE_PRIVATE)
@@ -161,7 +155,7 @@ class RemoteService : Service() {
             .acquire(3000)
     }
 
-    /** Remote buttons. Arrow/OK use accessibility D-pad actions (Android 13+); ff/rew are media keys. */
+    /** Remote buttons. Back and arrows/OK use accessibility actions (D-pad needs Android 13+); ff/rew are media keys. */
     private fun key(k: String): String {
         val media = when (k) {
             "ff" -> KeyEvent.KEYCODE_MEDIA_FAST_FORWARD
@@ -178,13 +172,9 @@ class RemoteService : Service() {
         when (k) {
             "home" -> {
                 wake()
-                if (Settings.canDrawOverlays(this)) dashboard(false)
+                if (Settings.canDrawOverlays(this)) dashboard()
                 else if (svc != null) svc.performGlobalAction(AccessibilityService.GLOBAL_ACTION_HOME)
                 else return "no-a11y"
-            }
-            "apps" -> {
-                if (!Settings.canDrawOverlays(this)) return "no-overlay"
-                wake(); dashboard(true)
             }
             "settings" -> {
                 if (!Settings.canDrawOverlays(this)) return "no-overlay"
@@ -193,6 +183,7 @@ class RemoteService : Service() {
             }
             else -> {
                 val action = when (k) {
+                    "back" -> AccessibilityService.GLOBAL_ACTION_BACK
                     "up" -> AccessibilityService.GLOBAL_ACTION_DPAD_UP
                     "down" -> AccessibilityService.GLOBAL_ACTION_DPAD_DOWN
                     "left" -> AccessibilityService.GLOBAL_ACTION_DPAD_LEFT
@@ -207,11 +198,10 @@ class RemoteService : Service() {
         return "ok"
     }
 
-    private fun dashboard(apps: Boolean) {
+    private fun dashboard() {
         startActivity(
             Intent(this, MainActivity::class.java)
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
-                .putExtra("apps", apps)
         )
     }
 
