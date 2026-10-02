@@ -27,7 +27,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 
 /** Remote icons, drawn natively in the shapes of Material Symbols (home, settings, apps, keyboard, ...). */
-enum class Ico { Home, Settings, Apps, Keyboard, Up, Down, Left, Right, Forward, Rewind }
+enum class Ico { Back, Home, Settings, Apps, Keyboard, Up, Down, Left, Right, Forward, Rewind }
 
 @Composable
 fun RIcon(icon: Ico, tint: Color, dp: Dp = 28.dp) {
@@ -42,6 +42,7 @@ fun RIcon(icon: Ico, tint: Color, dp: Dp = 28.dp) {
             fun line(vararg p: Float) = drawPath(path(false, *p), tint, style = stroke)
             fun poly(vararg p: Float) = drawPath(path(true, *p), tint)
             when (icon) {
+                Ico.Back -> { line(20f, 12f, 4f, 12f); line(10f, 6f, 4f, 12f, 10f, 18f) }
                 Ico.Up -> line(6f, 15f, 12f, 9f, 18f, 15f)
                 Ico.Down -> line(6f, 9f, 12f, 15f, 18f, 9f)
                 Ico.Left -> line(15f, 6f, 9f, 12f, 15f, 18f)
