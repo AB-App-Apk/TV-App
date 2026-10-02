@@ -11,15 +11,12 @@ import android.provider.Settings
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.Image
-import androidx.compose.foundation.focusGroup
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.grid.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.focus.FocusRequester
-import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
@@ -42,15 +39,9 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         ContextCompat.startForegroundService(this, Intent(this, RemoteService::class.java))
-        if (intent.getBooleanExtra("apps", false)) Nav.appsRequest++
         setContent {
             MaterialTheme(colorScheme = darkColorScheme()) { HomeScreen() }
         }
-    }
-
-    override fun onNewIntent(intent: Intent) {
-        super.onNewIntent(intent)
-        if (intent.getBooleanExtra("apps", false)) Nav.appsRequest++
     }
 }
 
@@ -60,15 +51,6 @@ fun HomeScreen() {
     val ctx = LocalContext.current
     val upd = remember { UpdateController(ctx, "TvDash.apk") }
     val scope = rememberCoroutineScope()
-    val gridState = rememberLazyGridState()
-    val firstApp = remember { FocusRequester() }
-    LaunchedEffect(Nav.appsRequest) {
-        if (Nav.appsRequest > 0) {
-            gridState.animateScrollToItem(2)
-            delay(300)
-            runCatching { firstApp.requestFocus() }
-        }
-    }
     DisposableEffect(Unit) { upd.start(); onDispose { upd.stop() } }
     LaunchedEffect(Unit) { upd.check() }
     var apps by remember { mutableStateOf<List<AppEntry>>(emptyList()) }
@@ -81,7 +63,6 @@ fun HomeScreen() {
     }
 
     LazyVerticalGrid(
-        state = gridState,
         columns = GridCells.Adaptive(200.dp),
         contentPadding = PaddingValues(48.dp),
         horizontalArrangement = Arrangement.spacedBy(20.dp),
@@ -112,9 +93,7 @@ fun HomeScreen() {
         item(span = { GridItemSpan(maxLineSpan) }) {
             Text("Apps", style = MaterialTheme.typography.headlineSmall, modifier = Modifier.padding(top = 12.dp))
         }
-        itemsIndexed(apps, key = { _, a -> a.pkg }) { i, app ->
-            Box(if (i == 0) Modifier.focusRequester(firstApp).focusGroup() else Modifier) { AppCard(app) }
-        }
+        items(apps, key = { it.pkg }) { app -> AppCard(app) }
     }
 }
 
