@@ -83,7 +83,8 @@ fun RemoteScreen() {
                 null -> noTv
                 "no-a11y" -> "On the TV, turn on TV Dash in Settings > Accessibility."
                 "no-overlay" -> "On the TV, allow 'Display over other apps' for TV Dash."
-                "no-field" -> "Select a text field on the TV first."
+                "no-field" -> "Select the search box on the TV first (press OK on it), then type."
+                "no-keyboard" -> "On the TV, select the Phone remote card and finish the keyboard setup (turn on and choose TV Dash phone keyboard)."
                 else -> ""
             }
         }
@@ -176,7 +177,7 @@ fun RemoteScreen() {
                     RemoteButton(Ico.Rewind, "Rewind", Modifier.weight(1f)) { send("key?k=rew") }
                     RemoteButton(Ico.Keyboard, "Keyboard", Modifier.weight(1f)) {
                         typing = !typing
-                        if (typing) { text = ""; sent = "" }
+                        if (typing) { text = ""; sent = "" } else send("text?done=1")
                     }
                     RemoteButton(Ico.Forward, "Forward", Modifier.weight(1f)) { send("key?k=ff") }
                 }
@@ -189,8 +190,8 @@ fun RemoteScreen() {
                         label = { Text("Typing on TV") },
                         modifier = Modifier.fillMaxWidth().focusRequester(focus),
                         keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
-                        keyboardActions = KeyboardActions(onSearch = { send("text?t=${enc(text)}&enter=1") }),
-                        trailingIcon = { TextButton(onClick = { typing = false }) { Text("Close") } }
+                        keyboardActions = KeyboardActions(onSearch = { send("text?t=${enc(text)}&enter=1"); typing = false }),
+                        trailingIcon = { TextButton(onClick = { typing = false; send("text?done=1") }) { Text("Close") } }
                     )
                 }
                 TextButton(onClick = { editing = true }) { Text("Change TV") }
