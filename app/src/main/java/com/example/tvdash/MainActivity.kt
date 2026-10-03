@@ -81,7 +81,7 @@ fun HomeScreen() {
                     openSettings(ctx, Settings.ACTION_INTERNAL_STORAGE_SETTINGS)
                 }
                 DashCard("Phone remote", "PIN ${pin(ctx)}", localIp(ctx), Modifier.weight(1f)) {
-                    openSettings(ctx, if (PowerAccessibilityService.instance == null) Settings.ACTION_ACCESSIBILITY_SETTINGS else Settings.ACTION_MANAGE_OVERLAY_PERMISSION)
+                    setupStep(ctx)
                 }
             }
         }
