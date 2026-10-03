@@ -63,6 +63,17 @@
                 android:resource="@xml/accessibility_config" />
         </service>
 
+        <service
+            android:name=".RemoteKeyboardService"
+            android:exported="true"
+            android:label="TV Dash phone keyboard"
+            android:permission="android.permission.BIND_INPUT_METHOD">
+            <intent-filter>
+                <action android:name="android.view.InputMethod" />
+            </intent-filter>
+            <meta-data android:name="android.view.im" android:resource="@xml/method" />
+        </service>
+
         <receiver android:name=".BootReceiver" android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.BOOT_COMPLETED" />
