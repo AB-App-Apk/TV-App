@@ -20,6 +20,7 @@ import android.os.PowerManager
 import android.view.KeyEvent
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
+import android.view.inputmethod.InputMethodManager
 import androidx.core.content.ContextCompat
 import org.json.JSONArray
 import org.json.JSONObject
@@ -126,9 +127,9 @@ class RemoteService : Service() {
         "/power" -> if (u.getQueryParameter("s") == "on") { wake(); "ok" }
                     else PowerAccessibilityService.instance?.let { it.sleep(); "ok" } ?: "no-a11y"
         "/key" -> key(u.getQueryParameter("k") ?: "")
-        "/text" -> PowerAccessibilityService.instance?.let {
-            if (it.typeText(u.getQueryParameter("t") ?: "", u.getQueryParameter("enter") == "1")) "ok" else "no-field"
-        } ?: "no-a11y"
+        "/text" -> typeOnTv(
+            u.getQueryParameter("t") ?: "", u.getQueryParameter("enter") == "1", u.getQueryParameter("done") == "1"
+        )
         "/launch" -> { launch(u.getQueryParameter("pkg") ?: ""); "ok" }
         else -> "ok"
     }
@@ -205,6 +206,17 @@ class RemoteService : Service() {
         )
     }
 
+    /** Text from the phone: first through the TV Dash keyboard (works in any app), then via accessibility. */
+    private fun typeOnTv(text: String, enter: Boolean, done: Boolean): String {
+        val ime = RemoteKeyboardService.instance
+        if (ime != null && ime.type(text, enter, done)) return "ok"
+        if (done) return "ok"
+        val a11y = PowerAccessibilityService.instance
+        if (a11y != null && a11y.typeText(text, enter)) return "ok"
+        // ime == null means TV Dash is not the active keyboard yet, so that is the likely reason
+        return if (ime == null) "no-keyboard" else "no-field"
+    }
+
     private fun launch(pkg: String) {
         wake()
         val i = (packageManager.getLeanbackLaunchIntentForPackage(pkg)
@@ -221,4 +233,17 @@ class RemoteService : Service() {
             .map { it.loadLabel(pm).toString() to it.activityInfo.packageName }
             .sortedBy { it.first.lowercase() }
     }
+}
+
+/** Next unfinished setup step for the phone remote. Each tap on the dashboard card moves one step along. */
+fun setupStep(ctx: Context) {
+    val imm = ctx.getSystemService(InputMethodManager::class.java)
+    val keyboardOn = imm.enabledInputMethodList.any { it.packageName == ctx.packageName }
+    val action = when {
+        PowerAccessibilityService.instance == null -> Settings.ACTION_ACCESSIBILITY_SETTINGS
+        !Settings.canDrawOverlays(ctx) -> Settings.ACTION_MANAGE_OVERLAY_PERMISSION
+        !keyboardOn -> Settings.ACTION_INPUT_METHOD_SETTINGS
+        else -> { imm.showInputMethodPicker(); return }
+    }
+    runCatching { ctx.startActivity(Intent(action).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
 }
