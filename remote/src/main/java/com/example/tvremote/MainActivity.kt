@@ -71,6 +71,10 @@ fun RemoteScreen() {
     var text by remember { mutableStateOf("") }
     var sent by remember { mutableStateOf("") }
     val scope = rememberCoroutineScope()
+    // YouTube search: the text box below is the source of truth; the controller queues one search per submit.
+    val yt = remember { YouTubeSearchController(TvLink({ host.trim() }, { pin.trim() }), CommandQueue(scope)) }
+    val ytState by yt.state.collectAsState()
+    var ytMode by remember { mutableStateOf(true) }
     val noTv = "Can't reach the TV. Check the IP, PIN and Wi-Fi."
     val upd = remember { UpdateController(ctx, "TvRemote.apk") }
     DisposableEffect(Unit) { upd.start(); onDispose { upd.stop() } }
@@ -102,8 +106,8 @@ fun RemoteScreen() {
 
     LaunchedEffect(editing) { if (!editing) loadApps() }
     // Stream what is typed on the phone keyboard to the TV (short pause so fast typing is batched).
-    LaunchedEffect(text, typing) {
-        if (typing && text != sent) { delay(120); sent = text; send("text?t=${enc(text)}&enter=0") }
+    LaunchedEffect(text, typing, ytMode) {
+        if (typing && !ytMode && text != sent) { delay(120); sent = text; send("text?t=${enc(text)}&enter=0") }
     }
 
     if (screen == "apps" && !editing) {
@@ -177,7 +181,7 @@ fun RemoteScreen() {
                     RemoteButton(Ico.Rewind, "Rewind", Modifier.weight(1f)) { send("key?k=rew") }
                     RemoteButton(Ico.Keyboard, "Keyboard", Modifier.weight(1f)) {
                         typing = !typing
-                        if (typing) { text = ""; sent = "" } else send("text?done=1")
+                        if (typing) { text = ""; sent = ""; yt.clear() } else if (!ytMode) send("text?done=1")
                     }
                     RemoteButton(Ico.Forward, "Forward", Modifier.weight(1f)) { send("key?k=ff") }
                 }
@@ -185,14 +189,21 @@ fun RemoteScreen() {
                     val focus = remember { FocusRequester() }
                     val keyboard = LocalSoftwareKeyboardController.current
                     LaunchedEffect(Unit) { focus.requestFocus(); keyboard?.show() }
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Switch(checked = ytMode, onCheckedChange = { ytMode = it })
+                        Text("YouTube search", Modifier.padding(start = 8.dp))
+                    }
                     OutlinedTextField(
                         value = text, onValueChange = { text = it }, singleLine = true,
-                        label = { Text("Typing on TV") },
+                        label = { Text(if (ytMode) "Search YouTube on the TV" else "Typing on TV") },
                         modifier = Modifier.fillMaxWidth().focusRequester(focus),
                         keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
-                        keyboardActions = KeyboardActions(onSearch = { send("text?t=${enc(text)}&enter=1"); typing = false }),
-                        trailingIcon = { TextButton(onClick = { typing = false; send("text?done=1") }) { Text("Close") } }
+                        keyboardActions = KeyboardActions(onSearch = {
+                            if (ytMode) yt.submit(text) else { send("text?t=${enc(text)}&enter=1"); typing = false }
+                        }),
+                        trailingIcon = { TextButton(onClick = { typing = false; if (!ytMode) send("text?done=1") }) { Text("Close") } }
                     )
+                    if (ytMode) SearchStatusLine(ytState, onRetry = { yt.retry() })
                 }
                 TextButton(onClick = { editing = true }) { Text("Change TV") }
             }
