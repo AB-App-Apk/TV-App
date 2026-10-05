@@ -131,6 +131,7 @@ class RemoteService : Service() {
             u.getQueryParameter("t") ?: "", u.getQueryParameter("enter") == "1", u.getQueryParameter("done") == "1"
         )
         "/launch" -> { launch(u.getQueryParameter("pkg") ?: ""); "ok" }
+        "/yt" -> youtube(u)
         else -> "ok"
     }
 
@@ -215,6 +216,23 @@ class RemoteService : Service() {
         if (a11y != null && a11y.typeText(text, enter)) return "ok"
         // ime == null means TV Dash is not the active keyboard yet, so that is the likely reason
         return if (ime == null) "no-keyboard" else "no-field"
+    }
+
+    private var lastSearchId = 0L
+
+    /**
+     * Opens YouTube search results for the phone's text. The phone repeats a request when an answer is lost, so a
+     * repeated id means "already opened": answer ok without opening a second search.
+     */
+    @Synchronized
+    private fun youtube(u: Uri): String {
+        val id = u.getQueryParameter("id")?.toLongOrNull() ?: 0L
+        if (id != 0L && id == lastSearchId) return "ok"
+        if (!Settings.canDrawOverlays(this)) return "no-overlay"
+        wake()
+        val result = YouTubeLauncher(this).search(u.getQueryParameter("q") ?: "", PowerAccessibilityService.instance ?: this)
+        if (result == YtResult.LAUNCHED && id != 0L) lastSearchId = id
+        return result.code
     }
 
     private fun launch(pkg: String) {
