@@ -1,5 +1,6 @@
 package com.example.tvdash
 
+import android.content.ComponentCallbacks2
 import android.content.Context
 import android.content.Intent
 import android.net.ConnectivityManager
@@ -43,7 +44,15 @@ class MainActivity : ComponentActivity() {
             MaterialTheme(colorScheme = darkColorScheme()) { HomeScreen() }
         }
     }
+
+    /** When the user leaves for a heavy app, give back the memory the app icons use; they reload on return. */
+    override fun onTrimMemory(level: Int) {
+        super.onTrimMemory(level)
+        if (level >= ComponentCallbacks2.TRIM_MEMORY_UI_HIDDEN) Trim.level++
+    }
 }
+
+object Trim { var level by mutableIntStateOf(0) }
 
 
 @Composable
@@ -55,7 +64,12 @@ fun HomeScreen() {
     LaunchedEffect(Unit) { upd.check() }
     var apps by remember { mutableStateOf<List<AppEntry>>(emptyList()) }
     var reload by remember { mutableIntStateOf(0) }
-    LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { reload++ }
+    LifecycleEventEffect(Lifecycle.Event.ON_RESUME) {
+        reload++
+        if (AccessGuard.state(ctx) == AccessState.DROPPED) AccessGuard.reEnable(ctx)
+    }
+    LaunchedEffect(Trim.level) { if (Trim.level > 0) apps = emptyList() }
+    val access = AccessGuard.state(ctx)
     LaunchedEffect(reload) { apps = withContext(Dispatchers.IO) { loadApps(ctx) } }
 
     val status by produceState(readStatus(ctx)) {
@@ -69,6 +83,18 @@ fun HomeScreen() {
         verticalArrangement = Arrangement.spacedBy(20.dp),
         modifier = Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)
     ) {
+        if (access != AccessState.OK) item(span = { GridItemSpan(maxLineSpan) }) {
+            DashCard(
+                "Remote control",
+                when (access) { AccessState.CONNECTING -> "Starting..."; AccessState.DROPPED -> "Paused"; else -> "Off" },
+                when (access) {
+                    AccessState.CONNECTING -> "Waiting for Android to start the accessibility service."
+                    AccessState.DROPPED -> "Android stopped the accessibility service. Select to turn it back on."
+                    else -> "Accessibility is off. Select to turn it on."
+                },
+                Modifier.fillMaxWidth()
+            ) { AccessGuard.recover(ctx) }
+        }
         item(span = { GridItemSpan(maxLineSpan) }) {
             Row(horizontalArrangement = Arrangement.spacedBy(20.dp), modifier = Modifier.fillMaxWidth()) {
                 DashCard("Time", status.time.format(DateTimeFormatter.ofPattern("h:mm a")),
