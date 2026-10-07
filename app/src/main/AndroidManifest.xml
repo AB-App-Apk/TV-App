@@ -11,6 +11,8 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <uses-permission android:name="android.permission.WRITE_SECURE_SETTINGS"
+        tools:ignore="ProtectedPermissions" />
     <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES"
         tools:ignore="QueryAllPackagesPermission" />
 
@@ -52,7 +54,7 @@
 
         <service
             android:name=".PowerAccessibilityService"
-            android:exported="false"
+            android:exported="true"
             android:label="TV Dash remote"
             android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
             <intent-filter>
