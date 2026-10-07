@@ -11,23 +11,33 @@ import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.media.AudioManager
 import android.net.ConnectivityManager
+import android.net.Network
 import android.net.Uri
 import android.provider.Settings
 import android.os.Build
 import android.os.Bundle
+import android.os.Handler
 import android.os.IBinder
+import android.os.Looper
 import android.os.PowerManager
+import android.util.Log
 import android.view.KeyEvent
-import android.view.accessibility.AccessibilityEvent
-import android.view.accessibility.AccessibilityNodeInfo
 import android.view.inputmethod.InputMethodManager
 import androidx.core.content.ContextCompat
 import org.json.JSONArray
 import org.json.JSONObject
+import java.io.BufferedReader
+import java.io.IOException
 import java.net.Inet4Address
+import java.net.InetSocketAddress
 import java.net.ServerSocket
 import java.net.Socket
 import java.security.SecureRandom
+import java.util.concurrent.ArrayBlockingQueue
+import java.util.concurrent.ExecutorService
+import java.util.concurrent.RejectedExecutionException
+import java.util.concurrent.ThreadPoolExecutor
+import java.util.concurrent.TimeUnit
 import kotlin.concurrent.thread
 
 const val PORT = 8765
@@ -44,37 +54,50 @@ fun localIp(ctx: Context): String {
         ?.map { it.address }?.firstOrNull { it is Inet4Address }?.hostAddress ?: "No network"
 }
 
-/** Enabled by the user in Settings > Accessibility. Lets us put the TV to sleep. */
-class PowerAccessibilityService : AccessibilityService() {
-    companion object { @Volatile var instance: PowerAccessibilityService? = null }
-    override fun onServiceConnected() { instance = this }
-    override fun onUnbind(intent: Intent?): Boolean { instance = null; return super.onUnbind(intent) }
-    override fun onAccessibilityEvent(event: AccessibilityEvent?) {}
-    override fun onInterrupt() {}
-    fun sleep() { performGlobalAction(GLOBAL_ACTION_LOCK_SCREEN) }
-
-    /** Types into whichever text field has input focus (e.g. a search bar). */
-    fun typeText(text: String, enter: Boolean): Boolean {
-        val node = windows.mapNotNull { it.root }.firstNotNullOfOrNull { it.findFocus(AccessibilityNodeInfo.FOCUS_INPUT) }
-            ?: rootInActiveWindow?.findFocus(AccessibilityNodeInfo.FOCUS_INPUT)
-            ?: return false
-        val args = Bundle().apply { putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, text) }
-        val ok = node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)
-        if (ok && enter && Build.VERSION.SDK_INT >= 30)
-            node.performAction(AccessibilityNodeInfo.AccessibilityAction.ACTION_IME_ENTER.id)
-        return ok
-    }
-}
-
 class BootReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
-        ContextCompat.startForegroundService(context, Intent(context, RemoteService::class.java))
+        RemoteService.ensureRunning(context)
     }
 }
 
-/** Tiny HTTP server the phone talks to: /apps /launch /vol /power, all guarded by ?pin= */
+/**
+ * Tiny HTTP server the phone talks to (/apps /launch /vol /power /key /text /yt), every request guarded by ?pin=.
+ *
+ * Runs as a foreground service, so Android keeps its process at high priority and restarts it after a kill
+ * (START_STICKY). The listener never gives up: if its socket breaks it is reopened, and a health check every
+ * 15 seconds (and on every network change) verifies the port really answers.
+ */
 class RemoteService : Service() {
-    private var started = false
+    companion object {
+        private const val TAG = "RemoteService"
+        private const val HEALTH_MS = 15_000L
+
+        /** Starts or confirms the foreground listener. Safe to call from anywhere, as often as needed. */
+        fun ensureRunning(ctx: Context) {
+            try {
+                ContextCompat.startForegroundService(ctx, Intent(ctx, RemoteService::class.java))
+            } catch (e: Exception) {
+                Log.w(TAG, "Could not start the listener from the background", e)
+            }
+        }
+    }
+
+    private val main = Handler(Looper.getMainLooper())
+
+    /** At most 4 requests at once and 16 waiting; anything more is refused, so memory use stays flat. */
+    private val pool: ExecutorService = ThreadPoolExecutor(4, 4, 30L, TimeUnit.SECONDS, ArrayBlockingQueue(16))
+
+    @Volatile private var running = false
+    @Volatile private var server: ServerSocket? = null
+    private var networkCallback: ConnectivityManager.NetworkCallback? = null
+
+    private val healthTick = object : Runnable {
+        override fun run() {
+            runOffMain { checkHealth() }
+            main.postDelayed(this, HEALTH_MS)
+        }
+    }
+
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -85,30 +108,127 @@ class RemoteService : Service() {
             .setContentTitle("Phone remote is on").build()
         if (Build.VERSION.SDK_INT >= 34) startForeground(1, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
         else startForeground(1, n)
-        if (!started) { started = true; thread { serve() } }
+        if (!running) {
+            running = true
+            thread(name = "remote-listener") { serveForever() }
+            main.postDelayed(healthTick, HEALTH_MS)
+            watchNetwork()
+        }
         return START_STICKY
     }
 
-    private fun serve() {
+    override fun onDestroy() {
+        running = false
+        main.removeCallbacks(healthTick)
+        networkCallback?.let { cb ->
+            runCatching { getSystemService(ConnectivityManager::class.java).unregisterNetworkCallback(cb) }
+        }
+        runCatching { server?.close() }
+        pool.shutdownNow()
+        super.onDestroy()
+    }
+
+    /** Accept loop that never gives up: if the socket breaks it is reopened after a short, growing wait. */
+    private fun serveForever() {
+        var wait = 500L
+        while (running) {
+            try {
+                ServerSocket().use { s ->
+                    s.reuseAddress = true
+                    s.bind(InetSocketAddress(PORT))
+                    server = s
+                    wait = 500L
+                    while (running) {
+                        val c = s.accept()
+                        try {
+                            pool.execute { handle(c) }
+                        } catch (e: RejectedExecutionException) {
+                            runCatching { c.close() }
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+                if (!running) break
+                Log.w(TAG, "listener restarting", e)
+                try { Thread.sleep(wait) } catch (ie: InterruptedException) { break }
+                wait = (wait * 2).coerceAtMost(8_000L)
+            }
+        }
+    }
+
+    /** Confirms the port answers on this device and reopens it if not; also repairs a dropped accessibility service. */
+    private fun checkHealth() {
+        val alive = try {
+            Socket().use { it.connect(InetSocketAddress("127.0.0.1", PORT), 800); true }
+        } catch (e: IOException) {
+            false
+        }
+        if (!alive && running) {
+            Log.w(TAG, "listener is not answering; reopening it")
+            runCatching { server?.close() } // the accept loop sees the error and binds again
+        }
+        if (AccessGuard.state(this) == AccessState.DROPPED) AccessGuard.reEnable(this)
+    }
+
+    private fun watchNetwork() {
         try {
-            val s = ServerSocket(PORT)
-            while (true) { val c = s.accept(); thread { handle(c) } }
-        } catch (e: Exception) { started = false }
+            val cb = object : ConnectivityManager.NetworkCallback() {
+                override fun onAvailable(network: Network) { runOffMain { checkHealth() } }
+            }
+            getSystemService(ConnectivityManager::class.java).registerDefaultNetworkCallback(cb)
+            networkCallback = cb
+        } catch (e: Exception) {
+            Log.w(TAG, "network callback unavailable", e)
+        }
+    }
+
+    private fun runOffMain(task: () -> Unit) {
+        try {
+            pool.execute {
+                try { task() } catch (t: Throwable) { Log.w(TAG, "background task failed", t) }
+            }
+        } catch (e: RejectedExecutionException) {
+            // Busy or shutting down: the next tick will try again.
+        }
+    }
+
+    /** Reads one request line, refusing anything longer than [max] so a bad client cannot use up memory. */
+    private fun readLineCapped(r: BufferedReader, max: Int = 4096): String? {
+        val sb = StringBuilder()
+        while (true) {
+            val ch = r.read()
+            if (ch == -1) return if (sb.isEmpty()) null else sb.toString()
+            if (ch == '\n'.code) return sb.toString().trimEnd('\r')
+            if (sb.length >= max) throw IOException("request line too long")
+            sb.append(ch.toChar())
+        }
     }
 
     private fun handle(c: Socket) {
         try {
             c.soTimeout = 3000
             val r = c.getInputStream().bufferedReader()
-            val line = r.readLine() ?: return
-            while (!r.readLine().isNullOrEmpty()) { }
+            val line = readLineCapped(r) ?: return
+            var headers = 0
+            while (headers++ < 64 && !readLineCapped(r).isNullOrEmpty()) { /* skip the request headers */ }
             val uri = Uri.parse("http://tv" + (line.split(" ").getOrNull(1) ?: "/"))
-            val ok = uri.getQueryParameter("pin") == pin(this)
-            val body = (if (ok) route(uri) else "").toByteArray()
-            val head = "HTTP/1.1 ${if (ok) "200 OK" else "403 Forbidden"}\r\nContent-Length: ${body.size}\r\nConnection: close\r\n\r\n"
+            val authorised = uri.getQueryParameter("pin") == pin(this)
+            var status = if (authorised) "200 OK" else "403 Forbidden"
+            val text = if (!authorised) "" else try {
+                route(uri)
+            } catch (e: Exception) {
+                Log.w(TAG, "command failed: ${uri.path}", e)
+                status = "500 Internal Server Error"
+                "error"
+            }
+            val body = text.toByteArray()
+            val head = "HTTP/1.1 $status\r\nContent-Length: ${body.size}\r\nConnection: close\r\n\r\n"
             c.getOutputStream().apply { write(head.toByteArray()); write(body); flush() }
         } catch (e: Exception) {
-        } finally { c.close() }
+            // A broken or hostile connection must never take the listener down.
+        } finally {
+            runCatching { c.close() }
+        }
     }
 
     private fun route(u: Uri): String = when (u.path) {
