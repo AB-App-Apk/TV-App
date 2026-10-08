@@ -1,6 +1,7 @@
 package com.example.tvremote
 
 import android.os.Bundle
+import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
@@ -72,7 +73,10 @@ fun RemoteScreen() {
     var sent by remember { mutableStateOf("") }
     val scope = rememberCoroutineScope()
     // YouTube search: the text box below is the source of truth; the controller queues one search per submit.
-    val yt = remember { YouTubeSearchController(TvLink({ host.trim() }, { pin.trim() }), CommandQueue(scope)) }
+    val link = remember { TvLink({ host.trim() }, { pin.trim() }) }
+    val yt = remember { YouTubeSearchController(link, CommandQueue(scope)) }
+    val tvPower = remember { GrennoTvRemoteManager(ctx) }
+    var mac by remember { mutableStateOf(prefs.getString("mac", "") ?: "") }
     val ytState by yt.state.collectAsState()
     var ytMode by remember { mutableStateOf(true) }
     val noTv = "Can't reach the TV. Check the IP, PIN and Wi-Fi."
@@ -91,6 +95,40 @@ fun RemoteScreen() {
                 "no-keyboard" -> "On the TV, select the Phone remote card and finish the keyboard setup (turn on and choose TV Dash phone keyboard)."
                 else -> ""
             }
+        }
+    }
+
+    /** Power On: TV Dash answers when the TV is awake; otherwise try the phone's IR blaster, then Wake-on-LAN. */
+    fun powerOn() {
+        scope.launch {
+            fun say(m: String) = Toast.makeText(ctx, m, Toast.LENGTH_LONG).show()
+            // The IR code is a toggle, so it must never be sent while the TV is awake: it would switch the TV off.
+            if (link.get("ping") !is TvReply.Unreachable) {
+                send("power?s=on")
+                say("The TV is already on. Waking the screen if it was dark.")
+                return@launch
+            }
+            var why = "No IR blaster on this phone."
+            if (tvPower.hasIrEmitter()) {
+                if (!tvPower.verifyHardwareCompatibility()) {
+                    why = "This phone's IR blaster can't send 38 kHz."
+                } else if (tvPower.transmitPowerToggle()) {
+                    say("IR power signal sent. Point the phone's IR window at the TV.")
+                    return@launch
+                } else {
+                    why = "The IR signal could not be sent."
+                }
+            }
+            val started = tvPower.executeWakeOnLanFlood(
+                mac,
+                stopWhen = { link.get("ping") !is TvReply.Unreachable }
+            ) { awake ->
+                say(if (awake) "The TV is awake." else "No answer after 45 seconds. This TV may not wake from the network.")
+            }
+            say(
+                if (started) "$why Wake-on-LAN started: one packet every 0.75 s for 45 s."
+                else "$why Add the TV's MAC address under Change TV to use Wake-on-LAN."
+            )
         }
     }
 
@@ -132,17 +170,29 @@ fun RemoteScreen() {
                     singleLine = true, modifier = Modifier.fillMaxWidth(),
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
                 )
+                OutlinedTextField(
+                    value = mac, onValueChange = { mac = it },
+                    label = { Text("TV MAC address (optional, for Wake-on-LAN)") },
+                    supportingText = { Text("TV Settings > Device Preferences > About > Status") },
+                    singleLine = true, modifier = Modifier.fillMaxWidth()
+                )
                 Button(
                     onClick = {
-                        prefs.edit().putString("host", host.trim()).putString("pin", pin.trim()).apply()
-                        editing = false
+                        if (mac.isNotBlank() && tvPower.parseMac(mac) == null) {
+                            msg = "The MAC address needs 12 hex digits, like AA:BB:CC:DD:EE:FF."
+                        } else {
+                            prefs.edit().putString("host", host.trim()).putString("pin", pin.trim())
+                                .putString("mac", mac.trim()).apply()
+                            msg = ""
+                            editing = false
+                        }
                     },
                     modifier = Modifier.fillMaxWidth()
                 ) { Text("Connect") }
             } else {
                 // Power
                 Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    Button(onClick = { send("power?s=on") }, modifier = Modifier.weight(1f).height(56.dp)) { Text("On") }
+                    Button(onClick = { powerOn() }, modifier = Modifier.weight(1f).height(56.dp)) { Text("On") }
                     Button(
                         onClick = { send("power?s=off") }, modifier = Modifier.weight(1f).height(56.dp),
                         colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
