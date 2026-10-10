@@ -76,6 +76,9 @@ fun RemoteScreen() {
     val link = remember { TvLink({ host.trim() }, { pin.trim() }) }
     val yt = remember { YouTubeSearchController(link, CommandQueue(scope)) }
     val tvPower = remember { GrennoTvRemoteManager(ctx) }
+    val bluetooth = remember { BluetoothHidTransport(ctx) }
+    val transports = remember { TransportManager(ctx, WifiTransport(link), bluetooth) }
+    DisposableEffect(Unit) { transports.start(); onDispose { transports.stop() } }
     var mac by remember { mutableStateOf(prefs.getString("mac", "") ?: "") }
     val ytState by yt.state.collectAsState()
     var ytMode by remember { mutableStateOf(true) }
@@ -94,6 +97,22 @@ fun RemoteScreen() {
                 "no-field" -> "Select the search box on the TV first (press OK on it), then type."
                 "no-keyboard" -> "On the TV, select the Phone remote card and finish the keyboard setup (turn on and choose TV Dash phone keyboard)."
                 else -> ""
+            }
+        }
+    }
+
+    /** Remote keys: Wi-Fi when the TV answers, the Bluetooth keyboard link when it does not. */
+    fun press(command: RemoteCommand) {
+        scope.launch {
+            msg = when (val r = transports.send(command)) {
+                is DeliveryResult.Delivered -> when (r.reply) {
+                    "no-a11y" -> "On the TV, turn on TV Dash in Settings > Accessibility."
+                    "no-overlay" -> "On the TV, allow 'Display over other apps' for TV Dash."
+                    "rejected-403" -> "The TV rejected the PIN. Tap Change TV and enter the PIN shown on the TV."
+                    else -> ""
+                }
+                DeliveryResult.Unsupported -> "That button needs the Wi-Fi connection to the TV."
+                DeliveryResult.Offline -> noTv
             }
         }
     }
@@ -190,25 +209,26 @@ fun RemoteScreen() {
                     modifier = Modifier.fillMaxWidth()
                 ) { Text("Connect") }
             } else {
+                TransportStatusLine(transports)
                 // Power
                 Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                     Button(onClick = { powerOn() }, modifier = Modifier.weight(1f).height(56.dp)) { Text("On") }
                     Button(
-                        onClick = { send("power?s=off") }, modifier = Modifier.weight(1f).height(56.dp),
+                        onClick = { press(RemoteCommand.POWER_OFF) }, modifier = Modifier.weight(1f).height(56.dp),
                         colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
                     ) { Text("Off") }
                 }
                 // Volume
                 Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    FilledTonalButton(onClick = { send("vol?d=down") }, modifier = Modifier.weight(1f).height(56.dp)) { Text("Vol −") }
-                    FilledTonalButton(onClick = { send("vol?d=mute") }, modifier = Modifier.weight(1f).height(56.dp)) { Text("Mute") }
-                    FilledTonalButton(onClick = { send("vol?d=up") }, modifier = Modifier.weight(1f).height(56.dp)) { Text("Vol +") }
+                    FilledTonalButton(onClick = { press(RemoteCommand.VOLUME_DOWN) }, modifier = Modifier.weight(1f).height(56.dp)) { Text("Vol −") }
+                    FilledTonalButton(onClick = { press(RemoteCommand.MUTE) }, modifier = Modifier.weight(1f).height(56.dp)) { Text("Mute") }
+                    FilledTonalButton(onClick = { press(RemoteCommand.VOLUME_UP) }, modifier = Modifier.weight(1f).height(56.dp)) { Text("Vol +") }
                 }
                 // System row. Apps only opens the Apps section of this app.
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    RemoteButton(Ico.Back, "Back", Modifier.weight(1f)) { send("key?k=back") }
-                    RemoteButton(Ico.Home, "Home", Modifier.weight(1f)) { send("key?k=home") }
-                    RemoteButton(Ico.Settings, "Settings", Modifier.weight(1f)) { send("key?k=settings") }
+                    RemoteButton(Ico.Back, "Back", Modifier.weight(1f)) { press(RemoteCommand.BACK) }
+                    RemoteButton(Ico.Home, "Home", Modifier.weight(1f)) { press(RemoteCommand.HOME) }
+                    RemoteButton(Ico.Settings, "Settings", Modifier.weight(1f)) { press(RemoteCommand.SETTINGS) }
                     RemoteButton(Ico.Apps, "Apps", Modifier.weight(1f)) { screen = "apps"; loadApps() }
                 }
                 // D-pad
@@ -216,24 +236,24 @@ fun RemoteScreen() {
                     Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally,
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    DKey(Ico.Up) { send("key?k=up") }
+                    DKey(Ico.Up) { press(RemoteCommand.UP) }
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                        DKey(Ico.Left) { send("key?k=left") }
-                        Button(onClick = { send("key?k=ok") }, modifier = Modifier.size(88.dp), shape = CircleShape) {
+                        DKey(Ico.Left) { press(RemoteCommand.LEFT) }
+                        Button(onClick = { press(RemoteCommand.OK) }, modifier = Modifier.size(88.dp), shape = CircleShape) {
                             Text("OK", style = MaterialTheme.typography.titleLarge)
                         }
-                        DKey(Ico.Right) { send("key?k=right") }
+                        DKey(Ico.Right) { press(RemoteCommand.RIGHT) }
                     }
-                    DKey(Ico.Down) { send("key?k=down") }
+                    DKey(Ico.Down) { press(RemoteCommand.DOWN) }
                 }
                 // Media + keyboard
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    RemoteButton(Ico.Rewind, "Rewind", Modifier.weight(1f)) { send("key?k=rew") }
+                    RemoteButton(Ico.Rewind, "Rewind", Modifier.weight(1f)) { press(RemoteCommand.REWIND) }
                     RemoteButton(Ico.Keyboard, "Keyboard", Modifier.weight(1f)) {
                         typing = !typing
                         if (typing) { text = ""; sent = ""; yt.clear() } else if (!ytMode) send("text?done=1")
                     }
-                    RemoteButton(Ico.Forward, "Forward", Modifier.weight(1f)) { send("key?k=ff") }
+                    RemoteButton(Ico.Forward, "Forward", Modifier.weight(1f)) { press(RemoteCommand.FORWARD) }
                 }
                 if (typing) {
                     val focus = remember { FocusRequester() }
@@ -256,6 +276,7 @@ fun RemoteScreen() {
                     if (ytMode) SearchStatusLine(ytState, onRetry = { yt.retry() })
                 }
                 TextButton(onClick = { editing = true }) { Text("Change TV") }
+                BluetoothFallbackPanel(transports, bluetooth)
             }
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text(
