@@ -72,7 +72,9 @@ fun BluetoothFallbackPanel(manager: TransportManager, bluetooth: BluetoothHidTra
         }
         Text(
             "To pair once: tap Make phone visible, then on the TV open Settings > Remotes & accessories > Add accessory " +
-                "and select this phone. Then tap Choose TV and pick the TV. Bluetooth only sends the basic keys.",
+                "and select this phone. Then tap Choose TV and pick the TV. With TV Dash running, Bluetooth then carries " +
+                "everything Wi-Fi does (apps, YouTube search, Settings). If TV Dash is not running, only the basic keys work. " +
+                "The TV asks once to allow Nearby devices for TV Dash: choose Allow.",
             style = MaterialTheme.typography.bodySmall
         )
     }
