@@ -1,6 +1,10 @@
 package com.example.tvdash
 
 import android.content.ComponentCallbacks2
+import android.Manifest
+import android.content.pm.PackageManager
+import android.os.Build
+import androidx.activity.result.contract.ActivityResultContracts
 import android.content.Context
 import android.content.Intent
 import android.net.ConnectivityManager
@@ -37,9 +41,15 @@ import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
 
 class MainActivity : ComponentActivity() {
+    /** Lets TV Dash accept the phone's Bluetooth link. Android 12+ shows this as "Nearby devices". */
+    private val askBluetooth = registerForActivityResult(ActivityResultContracts.RequestPermission()) { }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         ContextCompat.startForegroundService(this, Intent(this, RemoteService::class.java))
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
+            checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED
+        ) askBluetooth.launch(Manifest.permission.BLUETOOTH_CONNECT)
         setContent {
             MaterialTheme(colorScheme = darkColorScheme()) { HomeScreen() }
         }
