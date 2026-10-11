@@ -49,14 +49,6 @@ class MainActivity : ComponentActivity() {
 
 private fun enc(s: String): String = URLEncoder.encode(s, "UTF-8")
 
-private fun call(host: String, pin: String, path: String): String? = try {
-    val sep = if ('?' in path) '&' else '?'
-    val c = URL("http://$host:8765/$path${sep}pin=$pin").openConnection() as HttpURLConnection
-    c.connectTimeout = 2000
-    c.readTimeout = 4000
-    if (c.responseCode == 200) c.inputStream.bufferedReader().readText() else null
-} catch (e: Exception) { null }
-
 @OptIn(ExperimentalComposeUiApi::class)
 @Composable
 fun RemoteScreen() {
@@ -73,11 +65,13 @@ fun RemoteScreen() {
     var sent by remember { mutableStateOf("") }
     val scope = rememberCoroutineScope()
     // YouTube search: the text box below is the source of truth; the controller queues one search per submit.
-    val link = remember { TvLink({ host.trim() }, { pin.trim() }) }
+    val btData = remember { BluetoothDataClient(ctx) { pin.trim() } }
+    DisposableEffect(Unit) { onDispose { btData.close() } }
+    val link = remember { TvLink({ host.trim() }, { pin.trim() }, btData) }
     val yt = remember { YouTubeSearchController(link, CommandQueue(scope)) }
     val tvPower = remember { GrennoTvRemoteManager(ctx) }
     val bluetooth = remember { BluetoothHidTransport(ctx) }
-    val transports = remember { TransportManager(ctx, WifiTransport(link), bluetooth) }
+    val transports = remember { TransportManager(ctx, link, WifiTransport(link), bluetooth) }
     DisposableEffect(Unit) { transports.start(); onDispose { transports.stop() } }
     var mac by remember { mutableStateOf(prefs.getString("mac", "") ?: "") }
     val ytState by yt.state.collectAsState()
@@ -89,7 +83,7 @@ fun RemoteScreen() {
 
     fun send(path: String) {
         scope.launch {
-            val r = withContext(Dispatchers.IO) { call(host.trim(), pin.trim(), path) }
+            val r = link.get(path).bodyOrNull()
             msg = when (r) {
                 null -> noTv
                 "no-a11y" -> "On the TV, turn on TV Dash in Settings > Accessibility."
@@ -153,7 +147,7 @@ fun RemoteScreen() {
 
     fun loadApps() {
         scope.launch {
-            val r = withContext(Dispatchers.IO) { call(host.trim(), pin.trim(), "apps") }
+            val r = link.get("apps").bodyOrNull()
             if (r == null) { msg = noTv; return@launch }
             val a = JSONArray(r)
             apps = List(a.length()) { a.getJSONObject(it).let { o -> o.getString("n") to o.getString("p") } }
