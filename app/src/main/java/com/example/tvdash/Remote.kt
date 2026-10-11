@@ -1,13 +1,19 @@
 package com.example.tvdash
 
+import android.Manifest
 import android.accessibilityservice.AccessibilityService
+import android.annotation.SuppressLint
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.Service
+import android.bluetooth.BluetoothManager
+import android.bluetooth.BluetoothServerSocket
+import android.bluetooth.BluetoothSocket
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
 import android.media.AudioManager
 import android.net.ConnectivityManager
@@ -24,10 +30,12 @@ import android.util.Log
 import android.view.KeyEvent
 import android.view.inputmethod.InputMethodManager
 import androidx.core.content.ContextCompat
+import com.example.tvlink.TvProtocol
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.BufferedReader
 import java.io.IOException
+import java.io.OutputStream
 import java.net.Inet4Address
 import java.net.InetSocketAddress
 import java.net.ServerSocket
@@ -35,6 +43,7 @@ import java.net.Socket
 import java.security.SecureRandom
 import java.util.concurrent.ArrayBlockingQueue
 import java.util.concurrent.ExecutorService
+import java.util.concurrent.Executors
 import java.util.concurrent.RejectedExecutionException
 import java.util.concurrent.ThreadPoolExecutor
 import java.util.concurrent.TimeUnit
@@ -89,6 +98,11 @@ class RemoteService : Service() {
 
     @Volatile private var running = false
     @Volatile private var server: ServerSocket? = null
+
+    /** The Bluetooth data channel: the phone's requests arrive here when Wi-Fi is not available. */
+    @Volatile private var btServer: BluetoothServerSocket? = null
+    @Volatile private var btClient: BluetoothSocket? = null
+    private val btPool: ExecutorService = Executors.newFixedThreadPool(2)
     private var networkCallback: ConnectivityManager.NetworkCallback? = null
 
     private val healthTick = object : Runnable {
@@ -111,6 +125,7 @@ class RemoteService : Service() {
         if (!running) {
             running = true
             thread(name = "remote-listener") { serveForever() }
+            thread(name = "remote-bluetooth") { serveBluetoothForever() }
             main.postDelayed(healthTick, HEALTH_MS)
             watchNetwork()
         }
@@ -124,6 +139,9 @@ class RemoteService : Service() {
             runCatching { getSystemService(ConnectivityManager::class.java).unregisterNetworkCallback(cb) }
         }
         runCatching { server?.close() }
+        runCatching { btServer?.close() }
+        runCatching { btClient?.close() }
+        btPool.shutdownNow()
         pool.shutdownNow()
         super.onDestroy()
     }
@@ -204,31 +222,110 @@ class RemoteService : Service() {
         }
     }
 
+    /** One request line in, one answer out. Wi-Fi and the Bluetooth data channel both use it, so they behave alike. */
+    private fun answer(line: String): Pair<String, String> {
+        val uri = Uri.parse("http://tv" + (line.split(" ").getOrNull(1) ?: "/"))
+        if (uri.getQueryParameter("pin") != pin(this)) return "403 Forbidden" to ""
+        return try {
+            "200 OK" to route(uri)
+        } catch (e: Exception) {
+            Log.w(TAG, "command failed: ${uri.path}", e)
+            "500 Internal Server Error" to "error"
+        }
+    }
+
+    private fun reply(out: OutputStream, status: String, text: String, keepOpen: Boolean) {
+        val body = text.toByteArray()
+        val head = "HTTP/1.1 $status\r\nContent-Length: ${body.size}\r\n" + (if (keepOpen) "" else "Connection: close\r\n") + "\r\n"
+        out.write(head.toByteArray())
+        out.write(body)
+        out.flush()
+    }
+
+    private fun skipHeaders(r: BufferedReader) {
+        var headers = 0
+        while (headers++ < 64 && !readLineCapped(r).isNullOrEmpty()) { /* skip the request headers */ }
+    }
+
+    /** Wi-Fi: one request per connection. */
     private fun handle(c: Socket) {
         try {
             c.soTimeout = 3000
             val r = c.getInputStream().bufferedReader()
             val line = readLineCapped(r) ?: return
-            var headers = 0
-            while (headers++ < 64 && !readLineCapped(r).isNullOrEmpty()) { /* skip the request headers */ }
-            val uri = Uri.parse("http://tv" + (line.split(" ").getOrNull(1) ?: "/"))
-            val authorised = uri.getQueryParameter("pin") == pin(this)
-            var status = if (authorised) "200 OK" else "403 Forbidden"
-            val text = if (!authorised) "" else try {
-                route(uri)
-            } catch (e: Exception) {
-                Log.w(TAG, "command failed: ${uri.path}", e)
-                status = "500 Internal Server Error"
-                "error"
-            }
-            val body = text.toByteArray()
-            val head = "HTTP/1.1 $status\r\nContent-Length: ${body.size}\r\nConnection: close\r\n\r\n"
-            c.getOutputStream().apply { write(head.toByteArray()); write(body); flush() }
+            skipHeaders(r)
+            val (status, text) = answer(line)
+            reply(c.getOutputStream(), status, text, keepOpen = false)
         } catch (e: Exception) {
             // A broken or hostile connection must never take the listener down.
         } finally {
             runCatching { c.close() }
         }
+    }
+
+    /** Bluetooth: the phone keeps one link open and sends many requests on it. */
+    private fun handleBluetooth(c: BluetoothSocket) {
+        try {
+            val r = c.inputStream.bufferedReader()
+            val out = c.outputStream
+            while (running) {
+                val line = readLineCapped(r) ?: break // the phone closed the link
+                skipHeaders(r)
+                val (status, text) = answer(line)
+                reply(out, status, text, keepOpen = true)
+            }
+        } catch (e: Exception) {
+            Log.i(TAG, "Bluetooth client left: ${e.message}")
+        } finally {
+            runCatching { c.close() }
+            if (btClient === c) btClient = null
+        }
+    }
+
+    /**
+     * Listens on a classic Bluetooth (RFCOMM) service so the phone can talk to TV Dash without Wi-Fi. It needs the
+     * phone to be paired with the TV and, on Android 12+, the "Nearby devices" permission. Until both are in
+     * place it checks again every 10 seconds, so nothing has to be restarted after the user allows it.
+     */
+    @SuppressLint("MissingPermission")
+    private fun serveBluetoothForever() {
+        var wait = 1_000L
+        while (running) {
+            try {
+                val adapter = getSystemService(BluetoothManager::class.java)?.adapter
+                val allowed = Build.VERSION.SDK_INT < Build.VERSION_CODES.S ||
+                    checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT) == PackageManager.PERMISSION_GRANTED
+                if (adapter == null || !allowed || !adapter.isEnabled) {
+                    sleepQuietly(10_000L)
+                    continue
+                }
+                adapter.listenUsingRfcommWithServiceRecord(TvProtocol.BT_SERVICE_NAME, TvProtocol.BT_UUID).use { listener ->
+                    btServer = listener
+                    wait = 1_000L
+                    Log.i(TAG, "Bluetooth data channel is listening")
+                    while (running) {
+                        val client = listener.accept()
+                        // Only one phone at a time: a new link replaces an old one that may be stale.
+                        btClient?.let { runCatching { it.close() } }
+                        btClient = client
+                        try {
+                            btPool.execute { handleBluetooth(client) }
+                        } catch (e: RejectedExecutionException) {
+                            runCatching { client.close() }
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+                if (!running) break
+                Log.w(TAG, "Bluetooth listener restarting", e)
+                sleepQuietly(wait)
+                wait = (wait * 2).coerceAtMost(30_000L)
+            }
+        }
+    }
+
+    private fun sleepQuietly(ms: Long) {
+        try { Thread.sleep(ms) } catch (e: InterruptedException) { /* stopping */ }
     }
 
     private fun route(u: Uri): String = when (u.path) {
