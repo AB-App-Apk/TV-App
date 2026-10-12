@@ -5,6 +5,7 @@ import android.net.ConnectivityManager
 import android.net.Network
 import android.net.NetworkCapabilities
 import android.net.NetworkRequest
+import android.os.SystemClock
 import android.util.Log
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -50,6 +51,23 @@ class TransportManager(
     private companion object {
         const val TAG = "TransportManager"
         const val PROBE_MS = 5_000L
+
+        /** TV Dash's answer when its accessibility service is off: it cannot press D-pad, OK or Back. */
+        const val NO_ACCESSIBILITY = "no-a11y"
+
+        /** After "no-a11y", keep sending those keys over the Bluetooth keyboard for this long before asking TV Dash again. */
+        const val KEYS_RECHECK_MS = 30_000L
+
+        /** If the Bluetooth keyboard link cannot be opened, wait this long before trying again. */
+        const val KEYBOARD_RETRY_MS = 30_000L
+
+        const val KEYBOARD_NOTE =
+            "D-pad, OK and Back are using the Bluetooth keyboard because TV Dash's accessibility service is off."
+
+        /** The keys that need TV Dash's accessibility service on the TV. */
+        val KEY_COMMANDS = setOf(
+            RemoteCommand.UP, RemoteCommand.DOWN, RemoteCommand.LEFT, RemoteCommand.RIGHT, RemoteCommand.OK, RemoteCommand.BACK
+        )
     }
 
     private val appContext = context.applicationContext
@@ -65,6 +83,12 @@ class TransportManager(
 
     private var networkCallback: ConnectivityManager.NetworkCallback? = null
     private var probeJob: Job? = null
+
+    // Keys that need the TV's accessibility service: when it is off they are sent over the Bluetooth keyboard instead.
+    private var a11yOff = false
+    private var a11yCheckedAt = 0L
+    private var keyboardActive = false
+    private var keyboardRetryAt = 0L
 
     // ---------------------------------------------------------------- lifecycle
 
@@ -113,12 +137,29 @@ class TransportManager(
 
     /** Roads 1 and 2: TV Dash answers, over Wi-Fi or over the Bluetooth data channel. */
     private suspend fun sendOverLink(command: RemoteCommand): DeliveryResult {
+        // Accessibility was found off a moment ago: D-pad, OK and Back go straight over the Bluetooth keyboard.
+        if (a11yOff && command in KEY_COMMANDS && SystemClock.elapsedRealtime() - a11yCheckedAt < KEYS_RECHECK_MS) {
+            sendViaKeyboardLink(command)?.let { return it }
+        }
         // A second try only while a road is believed to be fine; otherwise move on quickly.
         val attempts = if (_state.value == TransportState.WIFI_ACTIVE || _state.value == TransportState.BLUETOOTH_DATA) 2 else 1
         repeat(attempts) { attempt ->
             try {
                 val result = linked.sendCommand(command)
+                val refused = result is DeliveryResult.Delivered && result.reply == NO_ACCESSIBILITY
+                if (command in KEY_COMMANDS && result is DeliveryResult.Delivered) {
+                    if (refused) {
+                        a11yOff = true
+                        a11yCheckedAt = SystemClock.elapsedRealtime()
+                    } else {
+                        a11yOff = false // the key worked on the TV, so accessibility is back
+                        keyboardActive = false
+                    }
+                }
                 markLinkActive()
+                if (refused && (command in KEY_COMMANDS || command == RemoteCommand.HOME)) {
+                    sendViaKeyboardLink(command)?.let { return it }
+                }
                 return result
             } catch (e: IOException) {
                 Log.w(TAG, "TV Dash did not answer (attempt ${attempt + 1})", e)
@@ -126,6 +167,32 @@ class TransportManager(
         }
         enterFallback()
         return if (_state.value == TransportState.FALLBACK_LEVERAGED) sendOverKeys(command) else DeliveryResult.Offline
+    }
+
+    /**
+     * Sends a key over the Bluetooth keyboard while TV Dash is still reachable, because its accessibility service is
+     * off. Returns null when that link is not usable, so the caller keeps TV Dash's own answer.
+     */
+    private suspend fun sendViaKeyboardLink(command: RemoteCommand): DeliveryResult? {
+        if (bluetooth.getConnectionState().value != ConnectionState.CONNECTED) {
+            if (SystemClock.elapsedRealtime() < keyboardRetryAt) return null
+            if (!bluetooth.connect()) {
+                keyboardRetryAt = SystemClock.elapsedRealtime() + KEYBOARD_RETRY_MS
+                return null
+            }
+        }
+        return try {
+            bluetooth.sendCommand(command).also {
+                if (it is DeliveryResult.Delivered) {
+                    keyboardActive = true
+                    _notice.value = KEYBOARD_NOTE
+                }
+            }
+        } catch (e: IOException) {
+            Log.w(TAG, "The Bluetooth keyboard could not send the key", e)
+            keyboardActive = false
+            null
+        }
     }
 
     /** Road 3: plain keyboard keys over the Bluetooth HID link. */
@@ -151,8 +218,8 @@ class TransportManager(
 
     /** TV Dash answered. Record on which road, drop the keyboard link, and keep watching for Wi-Fi if it was Bluetooth. */
     private suspend fun markLinkActive() {
-        if (bluetooth.getConnectionState().value != ConnectionState.DISCONNECTED) bluetooth.disconnect()
-        _notice.value = ""
+        if (!keyboardActive && bluetooth.getConnectionState().value != ConnectionState.DISCONNECTED) bluetooth.disconnect()
+        _notice.value = if (keyboardActive) KEYBOARD_NOTE else ""
         if (link.carrier.value == Carrier.WIFI) {
             probeJob?.cancel()
             probeJob = null
