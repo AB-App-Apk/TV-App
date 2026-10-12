@@ -31,7 +31,7 @@ fun TransportStatusLine(manager: TransportManager, modifier: Modifier = Modifier
             style = MaterialTheme.typography.labelLarge,
             color = if (state == TransportState.OFFLINE) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface
         )
-        if (notice.isNotEmpty() && state != TransportState.WIFI_ACTIVE) {
+        if (notice.isNotEmpty()) {
             Text(notice, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
     }
