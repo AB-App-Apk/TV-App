@@ -43,7 +43,7 @@ object RemoteStatus {
     /** No link is up. It is held for up to 5 seconds and goes out by itself if a link returns. */
     const val QUEUED = "queued"
 
-    /** A link is up, but none of the roads available now can do this request (for example Settings with Bluetooth only). */
+    /** A link is up, but none of the roads available now can do this request (for example a TV Dash feature while only Bluetooth is up). */
     const val UNAVAILABLE = "unavailable"
 }
 
@@ -79,8 +79,9 @@ sealed class RemoteConnectionState {
  *    first: it needs neither TV Dash nor its accessibility service. If that link is down they go to TV Dash.
  *  - Home and Apps go to TV Dash first. If TV Dash is closed, or answers that it is blocked (accessibility or
  *    "Display over other apps" off), they are sent as the standard Home key and the standard All Apps key.
- *  - Settings has no standard key (Android's generic key layout maps nothing to Settings), so it needs TV Dash. With
- *    only Bluetooth up it ends as [RemoteStatus.UNAVAILABLE], silently.
+ *  - Settings has no standard key (Android's generic key layout maps nothing to Settings). Over Bluetooth it is sent
+ *    as the Meta+I shortcut, which newer Android versions use for Settings and an Android 14 TV may ignore, so TV Dash
+ *    stays the reliable way. [hint] says so whenever a shortcut stood in for Settings or Apps.
  *  - With no link at all, buttons wait in a 5-second first-in-first-out buffer while both links are retried with
  *    growing delays. When a link returns they are sent in the order pressed; older ones are dropped.
  *
@@ -275,6 +276,7 @@ class ConnectionManager(
                 try {
                     // Unsupported means the standard key layout has no key for this button (Settings): try TV Dash.
                     if (keyboardLink.sendCommand(command) is DeliveryResult.Delivered) {
+                        if (command == RemoteCommand.SETTINGS || command == RemoteCommand.APPS) noteShortcutUsed(command)
                         return DeliveryResult.Delivered(RemoteStatus.OK)
                     }
                 } catch (e: IOException) {
@@ -309,6 +311,11 @@ class ConnectionManager(
         } else {
             "TV Dash's accessibility service is off on the TV. Turn it on, or set up the Bluetooth keyboard."
         }
+    }
+
+    private fun noteShortcutUsed(command: RemoteCommand) {
+        val what = if (command == RemoteCommand.SETTINGS) "Settings sends the Meta+I shortcut" else "Apps sends the All Apps key"
+        _hint.value = "Over Bluetooth, $what. Some TVs ignore it; TV Dash opens it reliably."
     }
 
     private fun noteDashRejected(http: Int) {
