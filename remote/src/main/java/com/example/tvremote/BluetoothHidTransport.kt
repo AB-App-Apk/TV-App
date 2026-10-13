@@ -61,6 +61,7 @@ class BluetoothHidTransport(context: Context) : RemoteTransport {
         private const val MEDIA_VOLUME_DOWN = 0xEA
         private const val MEDIA_HOME = 0x223
         private const val MEDIA_BACK = 0x224
+        private const val MEDIA_ALL_APPS = 0x1A2 // Android maps this usage to KEYCODE_ALL_APPS
 
         /** US layout: index + 0x04 is the HID usage. \u0000 marks the one key we skip (non-US #). */
         private const val UNSHIFTED = "abcdefghijklmnopqrstuvwxyz1234567890\n\u001B\b\t -=[]\\\u0000;'`,./"
@@ -347,6 +348,7 @@ class BluetoothHidTransport(context: Context) : RemoteTransport {
         RemoteCommand.REWIND -> Usage.Media(MEDIA_REWIND)
         RemoteCommand.FORWARD -> Usage.Media(MEDIA_FORWARD)
         RemoteCommand.POWER_OFF -> Usage.Media(MEDIA_POWER)
+        RemoteCommand.APPS -> Usage.Media(MEDIA_ALL_APPS)
         RemoteCommand.SETTINGS -> null // no standard key for it
     }
 
