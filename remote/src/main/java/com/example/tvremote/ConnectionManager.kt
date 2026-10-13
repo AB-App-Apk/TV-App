@@ -26,6 +26,26 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeoutOrNull
 import java.io.IOException
 import java.net.URLEncoder
+import java.text.Normalizer
+
+/**
+ * The only words Layer 1 returns about how a request went. None of them is a prompt: the layers above decide
+ * whether anything is shown. TV Dash's own error codes ("no-a11y", "no-overlay", "no-keyboard", "no-field") and a
+ * refused PIN never leave Layer 1; they are turned into a fallback or into [UNAVAILABLE].
+ */
+object RemoteStatus {
+    /** It was carried out (sent to the TV by a link that accepted it). */
+    const val OK = "ok"
+
+    /** Typed, but some characters were replaced by plain letters or had no key at all. */
+    const val PARTIAL = "partial"
+
+    /** No link is up. It is held for up to 5 seconds and goes out by itself if a link returns. */
+    const val QUEUED = "queued"
+
+    /** A link is up, but none of the roads available now can do this request (for example Settings with Bluetooth only). */
+    const val UNAVAILABLE = "unavailable"
+}
 
 /**
  * How well the remote can reach the TV right now.
@@ -51,23 +71,29 @@ sealed class RemoteConnectionState {
  * Layer 1: the router and state engine.
  *
  * It keeps both links alive, publishes [state], and decides which link carries each button and each piece of typing,
- * so the layers above never choose a transport.
+ * so the layers above never choose a transport and never see an infrastructure error. Every request ends in one of
+ * the plain words in [RemoteStatus].
  *
  * Buttons ([sendRemoteCommand]):
- *  - D-pad, OK, Back, volume, mute and power go over the Bluetooth keyboard by default (real key presses, no
- *    accessibility service needed on the TV). If that link is lost they are sent to TV Dash instead.
- *  - Home, Settings, rewind and forward go to TV Dash first and use the Bluetooth keyboard when TV Dash is down.
- *  - With no link at all, commands wait in a 5-second first-in-first-out buffer while both links are retried with
- *    growing delays. When a link returns they are sent in the order they were pressed; older ones are dropped.
+ *  - D-pad, OK, Back, volume, mute, power, rewind and forward are real keys, so they go over the Bluetooth keyboard
+ *    first: it needs neither TV Dash nor its accessibility service. If that link is down they go to TV Dash.
+ *  - Home and Apps go to TV Dash first. If TV Dash is closed, or answers that it is blocked (accessibility or
+ *    "Display over other apps" off), they are sent as the standard Home key and the standard All Apps key.
+ *  - Settings has no standard key (Android's generic key layout maps nothing to Settings), so it needs TV Dash. With
+ *    only Bluetooth up it ends as [RemoteStatus.UNAVAILABLE], silently.
+ *  - With no link at all, buttons wait in a 5-second first-in-first-out buffer while both links are retried with
+ *    growing delays. When a link returns they are sent in the order pressed; older ones are dropped.
  *
  * Typing ([sendKeyboardPayload]): the phone's keyboard keeps sending the same requests as always
  * ("text?t=<all text so far>&enter=0|1", and "text?done=1" when it closes). The manager reads them and:
- *  - state FullyConnected or BluetoothOnly: types the change on the Bluetooth keyboard, key by key, so it works in
- *    any app that accepts a keyboard, including YouTube's own search box;
- *  - state WiFiOnly, or text the Bluetooth keyboard has no key for (accents, emoji): forwards the request to TV
- *    Dash with its text untouched, which accepts any character;
- *  - state Disconnected: holds the newest request for 5 seconds and sends it when a link returns.
- * A typing session keeps the road it started on, so text is never typed twice.
+ *  - when the text is plain keyboard characters and the Bluetooth keyboard is up, types the change as key presses
+ *    and backspaces, which works in any app, including YouTube's own search box;
+ *  - when the text has other characters (accents, emoji) it prefers TV Dash, which types any character, and uses the
+ *    Bluetooth keyboard only if TV Dash cannot (accents become plain letters, so é is typed as e; the rest is skipped);
+ *  - when TV Dash is closed, blocked, or has no text box to type in, the Bluetooth keyboard takes over; and the
+ *    other way round if the Bluetooth keyboard fails;
+ *  - with no link at all, holds the newest request for 5 seconds.
+ * A typing session keeps its road, so text is never typed twice.
  *
  * Call [start] when the screen appears and [stop] when it is destroyed.
  */
@@ -97,18 +123,42 @@ class ConnectionManager(
         /** A typing session with no activity for this long is over; its text is never edited again. */
         const val SESSION_IDLE_MS = 10_000L
 
+        /** After TV Dash cannot take typing (no keyboard set, no text box), do not ask it again for this long. */
+        const val DASH_TYPING_PAUSE_MS = 10_000L
+
         /** Sent over the Bluetooth keyboard first. */
         val KEYBOARD_FIRST = setOf(
             RemoteCommand.UP, RemoteCommand.DOWN, RemoteCommand.LEFT, RemoteCommand.RIGHT, RemoteCommand.OK,
             RemoteCommand.BACK, RemoteCommand.VOLUME_UP, RemoteCommand.VOLUME_DOWN, RemoteCommand.MUTE,
-            RemoteCommand.POWER_OFF
+            RemoteCommand.POWER_OFF, RemoteCommand.REWIND, RemoteCommand.FORWARD
         )
+
+        /** TV Dash answers meaning "I am open, but I cannot do that button". */
+        val BLOCKED_COMMAND = setOf("no-a11y", "no-overlay")
+
+        /** TV Dash answers meaning "I am open, but I cannot type that". */
+        val BLOCKED_TYPING = setOf("no-keyboard", "no-field", "no-a11y", "no-overlay")
 
         /**
          * The characters the Bluetooth keyboard can type: printable ASCII, the keys of a US keyboard. This must match
          * the table in [BluetoothHidTransport].
          */
         fun typable(c: Char): Boolean = c.code in 0x20..0x7E
+
+        /** Common characters that have a close stand-in on a US keyboard. */
+        private val STAND_INS = mapOf(
+            'ß' to "ss", 'æ' to "ae", 'Æ' to "AE", 'œ' to "oe", 'Œ' to "OE", 'ø' to "o", 'Ø' to "O",
+            'đ' to "d", 'Đ' to "D", 'ł' to "l", 'Ł' to "L", 'ı' to "i",
+            '\u2018' to "'", '\u2019' to "'", '\u201C' to "\"", '\u201D' to "\"",
+            '\u2013' to "-", '\u2014' to "-", '\u2026' to "...", '\u00A0' to " "
+        )
+
+        /** The keys to press for one character: itself, a plain-letter stand-in (é becomes e), or nothing at all. */
+        fun keysFor(c: Char): String {
+            if (typable(c)) return c.toString()
+            STAND_INS[c]?.let { return it }
+            return Normalizer.normalize(c.toString(), Normalizer.Form.NFD).filter { typable(it) }
+        }
     }
 
     private enum class Road { KEYBOARD, DASH }
@@ -143,6 +193,7 @@ class ConnectionManager(
     /** When typing moved from Bluetooth to TV Dash mid-session: the text already typed that TV Dash must leave alone. */
     private var imeBaseText = ""
     private var lastTypedAt = 0L
+    private var dashTypingPausedUntil = 0L
 
     @Volatile private var dashUp = false
     @Volatile private var keysUp = false
@@ -150,6 +201,14 @@ class ConnectionManager(
 
     private val _state = MutableStateFlow<RemoteConnectionState>(RemoteConnectionState.Disconnected)
     val state: StateFlow<RemoteConnectionState> = _state.asStateFlow()
+
+    private val _hint = MutableStateFlow("")
+
+    /**
+     * A plain sentence about why something is not working, for a status line if a layer above wants one. The manager
+     * never shows anything itself, and it is safe to ignore. Empty when there is nothing to say.
+     */
+    val hint: StateFlow<String> = _hint.asStateFlow()
 
     private var networkCallback: ConnectivityManager.NetworkCallback? = null
 
@@ -179,6 +238,7 @@ class ConnectionManager(
         dashUp = false
         keysUp = false
         _state.value = RemoteConnectionState.Disconnected
+        _hint.value = ""
         scope.launch { sendLock.withLock { buffer.clear() } }
         scope.launch {
             keyboardLock.withLock {
@@ -191,30 +251,31 @@ class ConnectionManager(
     // ---------------------------------------------------------------- buttons
 
     /**
-     * Sends one button press. Returns Delivered with the TV's answer, Unsupported when no working link can carry
-     * that button (for example Settings with only Bluetooth), or Offline when nothing is up. In the Offline case
-     * the command is held for up to 5 seconds and goes out by itself if a link returns in time.
+     * Sends one button press and always returns Delivered with a [RemoteStatus]: OK, UNAVAILABLE, or QUEUED. Nothing
+     * is thrown and no error code from the TV is passed on.
      */
     suspend fun sendRemoteCommand(command: RemoteCommand): DeliveryResult = sendLock.withLock {
         drainBufferLocked() // anything held earlier goes first, so the order of the presses is kept
         deliver(command) ?: run {
             hold(command)
-            DeliveryResult.Offline
+            DeliveryResult.Delivered(RemoteStatus.QUEUED)
         }
     }
 
-    /** Tries each road in order. Returns null when no link could carry the command. */
+    /**
+     * Tries each road in order: the Bluetooth keyboard first for real keys, TV Dash first for Home and Apps. A road
+     * that is down, refuses the button, or answers that TV Dash is blocked is skipped silently.
+     * Returns null when no link is up at all, so the caller holds the command.
+     */
     private suspend fun deliver(command: RemoteCommand): DeliveryResult? {
         val roads = if (command in KEYBOARD_FIRST) listOf(Road.KEYBOARD, Road.DASH) else listOf(Road.DASH, Road.KEYBOARD)
-        var unsupported = false
         for (road in roads) {
             if (road == Road.KEYBOARD) {
                 if (!keysUp) continue
                 try {
-                    when (val result = keyboardLink.sendCommand(command)) {
-                        is DeliveryResult.Delivered -> return result
-                        DeliveryResult.Unsupported -> unsupported = true
-                        DeliveryResult.Offline -> Log.w(TAG, "The Bluetooth keyboard could not send $command")
+                    // Unsupported means the standard key layout has no key for this button (Settings): try TV Dash.
+                    if (keyboardLink.sendCommand(command) is DeliveryResult.Delivered) {
+                        return DeliveryResult.Delivered(RemoteStatus.OK)
                     }
                 } catch (e: IOException) {
                     Log.w(TAG, "The Bluetooth keyboard link failed: ${e.message}")
@@ -223,9 +284,15 @@ class ConnectionManager(
             } else {
                 if (!dashUp) continue
                 when (val reply = link.get(command.wifiPath)) {
-                    is TvReply.Ok -> return DeliveryResult.Delivered(reply.body.trim())
-                    // A refusal still means TV Dash answered; the screen explains the PIN problem.
-                    is TvReply.Rejected -> return DeliveryResult.Delivered("rejected-${reply.http}")
+                    is TvReply.Ok -> {
+                        if (reply.body.trim() in BLOCKED_COMMAND) {
+                            noteDashBlocked()
+                        } else {
+                            _hint.value = ""
+                            return DeliveryResult.Delivered(RemoteStatus.OK)
+                        }
+                    }
+                    is TvReply.Rejected -> noteDashRejected(reply.http)
                     TvReply.Unreachable -> {
                         setDash(false)
                         dashNudge.trySend(Unit)
@@ -233,7 +300,19 @@ class ConnectionManager(
                 }
             }
         }
-        return if (unsupported && (dashUp || keysUp)) DeliveryResult.Unsupported else null
+        return if (dashUp || keysUp) DeliveryResult.Delivered(RemoteStatus.UNAVAILABLE) else null
+    }
+
+    private fun noteDashBlocked() {
+        _hint.value = if (keysUp) {
+            "TV Dash's accessibility service is off on the TV, so those buttons use the Bluetooth keyboard."
+        } else {
+            "TV Dash's accessibility service is off on the TV. Turn it on, or set up the Bluetooth keyboard."
+        }
+    }
+
+    private fun noteDashRejected(http: Int) {
+        _hint.value = if (http == 403) "The TV rejected the PIN. Check it under Change TV." else "TV Dash sent an unexpected answer ($http)."
     }
 
     // ---------------------------------------------------------------- the 5-second button buffer (callers hold sendLock)
@@ -271,10 +350,9 @@ class ConnectionManager(
     /**
      * Sends the phone keyboard's request. The request text is the same one the keyboard has always produced; the
      * manager decides how it reaches the TV (see the class comment). Requests that are not typing, such as a search
-     * link, go to TV Dash untouched.
+     * link, go to TV Dash untouched and their answer is passed on as it is.
      *
-     * Returns Ok when the text was typed or forwarded ("partial" if some characters had no key on the Bluetooth
-     * keyboard, "queued" if no link is up and it is waiting), or the TV's refusal.
+     * Typing always returns Ok with a [RemoteStatus]: OK, PARTIAL, QUEUED or UNAVAILABLE.
      */
     suspend fun sendKeyboardPayload(path: String): TvReply = keyboardLock.withLock {
         val payload = parseKeyboardPayload(path) ?: return@withLock postToDash(path)
@@ -310,50 +388,44 @@ class ConnectionManager(
             val reply = if (road == TypingRoad.KEYBOARD) typeOverKeyboard(payload) else typeOverDash(path, payload)
             if (reply != null) return reply
         }
-        // No link could take it: keep the newest request for 5 seconds.
+        if (dashUp || keysUp) return TvReply.Ok(RemoteStatus.UNAVAILABLE)
+        // No link at all: keep the newest request for 5 seconds.
         heldKeyboard = HeldPayload(path, queuedAt)
-        return TvReply.Ok("queued")
+        return TvReply.Ok(RemoteStatus.QUEUED)
     }
 
     /**
      * The roads to try, best first. A session already under way keeps its road while it is up. A new session follows
-     * the connection state.
+     * the connection state. Plain keyboard characters prefer the Bluetooth keyboard; anything else prefers TV Dash.
      */
     private fun typingRoads(text: String): List<TypingRoad> {
-        val keyboardOk = keysUp && text.all { typable(it) }
-        val dashOk = dashUp
-        return when (typingRoad) {
-            TypingRoad.KEYBOARD -> buildList {
-                if (keyboardOk) add(TypingRoad.KEYBOARD)
-                if (dashOk) add(TypingRoad.DASH)
-            }
-            TypingRoad.DASH -> buildList {
-                if (dashOk) add(TypingRoad.DASH)
-                if (keyboardOk) add(TypingRoad.KEYBOARD)
-            }
+        val exact = text.all { typable(it) }
+        val keyboardFirst = listOf(TypingRoad.KEYBOARD, TypingRoad.DASH)
+        val dashFirst = listOf(TypingRoad.DASH, TypingRoad.KEYBOARD)
+        val order = when (typingRoad) {
+            TypingRoad.KEYBOARD -> if (exact) keyboardFirst else dashFirst
+            TypingRoad.DASH -> dashFirst
             TypingRoad.NONE -> when (_state.value) {
-                RemoteConnectionState.FullyConnected, RemoteConnectionState.BluetoothOnly -> buildList {
-                    if (keyboardOk) add(TypingRoad.KEYBOARD)
-                    if (dashOk) add(TypingRoad.DASH)
-                    // Only Bluetooth is up and some characters have no key: type the others rather than nothing.
-                    if (!keyboardOk && !dashOk && keysUp) add(TypingRoad.KEYBOARD)
-                }
-                RemoteConnectionState.WiFiOnly -> if (dashOk) listOf(TypingRoad.DASH) else emptyList()
+                RemoteConnectionState.FullyConnected, RemoteConnectionState.BluetoothOnly -> if (exact) keyboardFirst else dashFirst
+                RemoteConnectionState.WiFiOnly -> listOf(TypingRoad.DASH)
                 RemoteConnectionState.Disconnected -> emptyList()
             }
         }
+        val dashOk = dashUp && SystemClock.elapsedRealtime() >= dashTypingPausedUntil
+        return order.filter { if (it == TypingRoad.KEYBOARD) keysUp else dashOk }
     }
 
     /**
      * Types the change since the last request: backspaces for what was removed, then the new characters, then Enter
-     * if the request submits. Returns null if the link failed, so the caller can try TV Dash.
+     * if the request submits. Characters with no key become their plain-letter stand-in or are skipped. Returns null
+     * if the link failed, so the caller can try TV Dash.
      */
     private suspend fun typeOverKeyboard(payload: KeyboardPayload): TvReply? {
         val target = payload.text
         val common = commonPrefixLength(sessionText, target)
-        val backspaces = sessionText.substring(common).count { typable(it) }
+        val backspaces = sessionText.substring(common).sumOf { keysFor(it).length }
         val tail = target.substring(common)
-        val typedTail = tail.filter { typable(it) }
+        val typedTail = tail.map { keysFor(it) }.joinToString("")
         val keys = "\b".repeat(backspaces) + typedTail + (if (payload.enter) "\n" else "")
         try {
             if (keys.isNotEmpty()) keyboardLink.sendText(keys)
@@ -362,13 +434,15 @@ class ConnectionManager(
             setKeys(false)
             return null
         }
+        val exact = tail.all { typable(it) }
         if (payload.enter) resetSession() else rememberSession(target, TypingRoad.KEYBOARD)
-        return TvReply.Ok(if (typedTail.length != tail.length) "partial" else "ok")
+        return TvReply.Ok(if (exact) RemoteStatus.OK else RemoteStatus.PARTIAL)
     }
 
     /**
      * Forwards the request to TV Dash. Its text is untouched, unless the session began on Bluetooth: then only the
-     * part after what Bluetooth already typed is sent, in the same request format.
+     * part after what Bluetooth already typed is sent, in the same request format. Returns null if TV Dash is
+     * unreachable, refuses, or cannot type right now, so the caller can try the Bluetooth keyboard.
      */
     private suspend fun typeOverDash(path: String, payload: KeyboardPayload): TvReply? {
         if (typingRoad == TypingRoad.KEYBOARD) {
@@ -383,15 +457,28 @@ class ConnectionManager(
             val tail = URLEncoder.encode(payload.text.removePrefix(imeBaseText), "UTF-8")
             "text?t=$tail&enter=${if (payload.enter) 1 else 0}"
         }
-        val reply = link.get(request)
-        if (reply is TvReply.Unreachable) {
-            setDash(false)
-            dashNudge.trySend(Unit)
-            return null
+        when (val reply = link.get(request)) {
+            TvReply.Unreachable -> {
+                setDash(false)
+                dashNudge.trySend(Unit)
+                return null
+            }
+            is TvReply.Rejected -> {
+                noteDashRejected(reply.http)
+                dashTypingPausedUntil = SystemClock.elapsedRealtime() + DASH_TYPING_PAUSE_MS
+                return null
+            }
+            is TvReply.Ok -> {
+                if (reply.body.trim() in BLOCKED_TYPING) {
+                    // TV Dash is open but cannot type (no keyboard chosen, no text box, no accessibility): step aside.
+                    dashTypingPausedUntil = SystemClock.elapsedRealtime() + DASH_TYPING_PAUSE_MS
+                    return null
+                }
+            }
         }
         setDash(true)
         if (payload.enter) resetSession() else rememberSession(payload.text, TypingRoad.DASH)
-        return reply
+        return TvReply.Ok(RemoteStatus.OK)
     }
 
     /** The keyboard closed. TV Dash has an open composition to finish; the Bluetooth keyboard has nothing to close. */
@@ -399,9 +486,8 @@ class ConnectionManager(
         val road = typingRoad
         resetSession()
         heldKeyboard = null
-        if (road == TypingRoad.KEYBOARD || !dashUp) return TvReply.Ok("ok")
-        val reply = postToDash(path)
-        return if (reply is TvReply.Unreachable) TvReply.Ok("ok") else reply
+        if (road != TypingRoad.KEYBOARD && dashUp) postToDash(path) // its answer does not matter: there is nothing left to type
+        return TvReply.Ok(RemoteStatus.OK)
     }
 
     private fun rememberSession(text: String, road: TypingRoad) {
