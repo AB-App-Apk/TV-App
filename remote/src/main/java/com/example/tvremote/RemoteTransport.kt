@@ -8,7 +8,7 @@ import java.io.IOException
 /** Every button the remote can send, independent of how it travels. [wifiPath] is the request TV Dash understands. */
 enum class RemoteCommand(val wifiPath: String) {
     UP("key?k=up"), DOWN("key?k=down"), LEFT("key?k=left"), RIGHT("key?k=right"), OK("key?k=ok"),
-    BACK("key?k=back"), HOME("key?k=home"), SETTINGS("key?k=settings"),
+    BACK("key?k=back"), HOME("key?k=home"), APPS("key?k=home"), SETTINGS("key?k=settings"),
     VOLUME_UP("vol?d=up"), VOLUME_DOWN("vol?d=down"), MUTE("vol?d=mute"),
     REWIND("key?k=rew"), FORWARD("key?k=ff"), POWER_OFF("power?s=off"),
 }
