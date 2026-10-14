@@ -13,7 +13,6 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancelChildren
 import kotlinx.coroutines.channels.Channel
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -200,6 +199,9 @@ class ConnectionManager(
     @Volatile private var keysUp = false
     @Volatile private var started = false
 
+    /** True while [hint] holds the reason the Bluetooth keyboard could not connect, so only that hint is cleared later. */
+    @Volatile private var keyboardHintShown = false
+
     private val _state = MutableStateFlow<RemoteConnectionState>(RemoteConnectionState.Disconnected)
     val state: StateFlow<RemoteConnectionState> = _state.asStateFlow()
 
@@ -215,6 +217,9 @@ class ConnectionManager(
 
     /** A network event wakes the TV Dash watcher early, so a returning Wi-Fi is noticed at once. */
     private val dashNudge = Channel<Unit>(Channel.CONFLATED)
+
+    /** Wakes the Bluetooth keyboard watcher early, for example right after the user chooses the TV. */
+    private val keyboardNudge = Channel<Unit>(Channel.CONFLATED)
 
     // ---------------------------------------------------------------- lifecycle
 
@@ -247,6 +252,11 @@ class ConnectionManager(
                 resetSession()
             }
         }
+    }
+
+    /** Call after the user allows Bluetooth or chooses the TV: look for the Bluetooth keyboard link right now. */
+    fun retryKeyboard() {
+        keyboardNudge.trySend(Unit)
     }
 
     // ---------------------------------------------------------------- buttons
@@ -596,18 +606,27 @@ class ConnectionManager(
                 val canTry = keyboardLink.isSupported() && keyboardLink.hasPermission() && !keyboardLink.targetAddress.isNullOrEmpty()
                 if (!canTry) {
                     setKeys(false)
-                    delay(NOT_SET_UP_RECHECK_MS)
+                    withTimeoutOrNull(NOT_SET_UP_RECHECK_MS) { keyboardNudge.receive() }
                     continue
                 }
                 if (keyboardLink.connect()) {
                     wait = BACKOFF_MIN_MS
+                    if (keyboardHintShown) {
+                        _hint.value = ""
+                        keyboardHintShown = false
+                    }
                     setKeys(true)
                     // Suspends while the link stays up; the HID service listener flips this state when it drops.
                     keyboardLink.getConnectionState().first { it != ConnectionState.CONNECTED }
                     setKeys(false)
                 } else {
                     setKeys(false)
-                    delay(wait)
+                    // Say why, so "nothing typed" can be traced to pairing, permission, or the TV being off.
+                    keyboardLink.lastProblem?.let {
+                        _hint.value = it
+                        keyboardHintShown = true
+                    }
+                    withTimeoutOrNull(wait) { keyboardNudge.receive() }
                     wait = (wait * 2).coerceAtMost(BACKOFF_MAX_MS)
                 }
             }
