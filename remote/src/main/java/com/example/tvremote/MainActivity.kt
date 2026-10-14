@@ -71,11 +71,11 @@ fun RemoteScreen() {
     val yt = remember { YouTubeSearchController(link, CommandQueue(scope)) }
     val tvPower = remember { GrennoTvRemoteManager(ctx) }
     val bluetooth = remember { BluetoothHidTransport(ctx) }
-    val transports = remember { TransportManager(ctx, link, WifiTransport(link), bluetooth) }
-    DisposableEffect(Unit) { transports.start(); onDispose { transports.stop() } }
+    val connection = remember { ConnectionManager(ctx, link, bluetooth) }
+    DisposableEffect(Unit) { connection.start(); onDispose { connection.stop() } }
     var mac by remember { mutableStateOf(prefs.getString("mac", "") ?: "") }
     val ytState by yt.state.collectAsState()
-    var ytMode by remember { mutableStateOf(true) }
+    var ytMode by remember { mutableStateOf(prefs.getBoolean("yt_mode", false)) }
     val noTv = "Can't reach the TV. Check the IP, PIN and Wi-Fi."
     val upd = remember { UpdateController(ctx, "TvRemote.apk") }
     DisposableEffect(Unit) { upd.start(); onDispose { upd.stop() } }
@@ -98,17 +98,14 @@ fun RemoteScreen() {
     /** Remote keys: Wi-Fi when the TV answers, the Bluetooth keyboard link when it does not. */
     fun press(command: RemoteCommand) {
         scope.launch {
-            msg = when (val r = transports.send(command)) {
-                is DeliveryResult.Delivered -> when (r.reply) {
-                    "no-a11y" -> "On the TV, turn on TV Dash in Settings > Accessibility."
-                    "no-overlay" -> "On the TV, allow 'Display over other apps' for TV Dash."
-                    "rejected-403" -> "The TV rejected the PIN. Tap Change TV and enter the PIN shown on the TV."
-                    else -> ""
-                }
-                DeliveryResult.Unsupported -> "That button needs the Wi-Fi connection to the TV."
-                DeliveryResult.Offline -> noTv
-            }
+            val status = (connection.sendRemoteCommand(command) as? DeliveryResult.Delivered)?.reply
+            msg = if (status == RemoteStatus.UNAVAILABLE) connection.hint.value.ifEmpty { "That button isn't available right now." } else ""
         }
+    }
+
+    /** Keyboard text goes through Layer 1: it types over Bluetooth or hands the text to TV Dash, whichever works. */
+    fun type(path: String) {
+        scope.launch { connection.sendKeyboardPayload(path) }
     }
 
     /** Power On: TV Dash answers when the TV is awake; otherwise try the phone's IR blaster, then Wake-on-LAN. */
@@ -158,7 +155,7 @@ fun RemoteScreen() {
     LaunchedEffect(editing) { if (!editing) loadApps() }
     // Stream what is typed on the phone keyboard to the TV (short pause so fast typing is batched).
     LaunchedEffect(text, typing, ytMode) {
-        if (typing && !ytMode && text != sent) { delay(120); sent = text; send("text?t=${enc(text)}&enter=0") }
+        if (typing && !ytMode && text != sent) { delay(120); sent = text; type("text?t=${enc(text)}&enter=0") }
     }
 
     if (screen == "apps" && !editing) {
@@ -203,7 +200,7 @@ fun RemoteScreen() {
                     modifier = Modifier.fillMaxWidth()
                 ) { Text("Connect") }
             } else {
-                TransportStatusLine(transports)
+                ConnectionStatusLine(connection)
                 // Power
                 Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                     Button(onClick = { powerOn() }, modifier = Modifier.weight(1f).height(56.dp)) { Text("On") }
@@ -245,7 +242,7 @@ fun RemoteScreen() {
                     RemoteButton(Ico.Rewind, "Rewind", Modifier.weight(1f)) { press(RemoteCommand.REWIND) }
                     RemoteButton(Ico.Keyboard, "Keyboard", Modifier.weight(1f)) {
                         typing = !typing
-                        if (typing) { text = ""; sent = ""; yt.clear() } else if (!ytMode) send("text?done=1")
+                        if (typing) { text = ""; sent = ""; yt.clear() } else if (!ytMode) type("text?done=1")
                     }
                     RemoteButton(Ico.Forward, "Forward", Modifier.weight(1f)) { press(RemoteCommand.FORWARD) }
                 }
@@ -254,8 +251,8 @@ fun RemoteScreen() {
                     val keyboard = LocalSoftwareKeyboardController.current
                     LaunchedEffect(Unit) { focus.requestFocus(); keyboard?.show() }
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Switch(checked = ytMode, onCheckedChange = { ytMode = it })
-                        Text("YouTube search", Modifier.padding(start = 8.dp))
+                        Switch(checked = ytMode, onCheckedChange = { ytMode = it; prefs.edit().putBoolean("yt_mode", it).apply() })
+                        Text("YouTube search (sent when you press Search; off = type live)", Modifier.padding(start = 8.dp))
                     }
                     OutlinedTextField(
                         value = text, onValueChange = { text = it }, singleLine = true,
@@ -263,14 +260,14 @@ fun RemoteScreen() {
                         modifier = Modifier.fillMaxWidth().focusRequester(focus),
                         keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
                         keyboardActions = KeyboardActions(onSearch = {
-                            if (ytMode) yt.submit(text) else { send("text?t=${enc(text)}&enter=1"); typing = false }
+                            if (ytMode) yt.submit(text) else { type("text?t=${enc(text)}&enter=1"); typing = false }
                         }),
-                        trailingIcon = { TextButton(onClick = { typing = false; if (!ytMode) send("text?done=1") }) { Text("Close") } }
+                        trailingIcon = { TextButton(onClick = { typing = false; if (!ytMode) type("text?done=1") }) { Text("Close") } }
                     )
                     if (ytMode) SearchStatusLine(ytState, onRetry = { yt.retry() })
                 }
                 TextButton(onClick = { editing = true }) { Text("Change TV") }
-                BluetoothFallbackPanel(transports, bluetooth)
+                BluetoothFallbackPanel(bluetooth, onChanged = { connection.retryKeyboard() })
             }
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text(
