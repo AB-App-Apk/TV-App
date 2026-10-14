@@ -20,26 +20,28 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 
-/** One line that says how the remote is connected, plus the reason when something is wrong. */
+/** One line that says how the remote is connected, plus a plain reason when something is not working. */
 @Composable
-fun TransportStatusLine(manager: TransportManager, modifier: Modifier = Modifier) {
+fun ConnectionStatusLine(manager: ConnectionManager, modifier: Modifier = Modifier) {
     val state by manager.state.collectAsState()
-    val notice by manager.notice.collectAsState()
+    val hint by manager.hint.collectAsState()
+    val label = when (state) {
+        RemoteConnectionState.FullyConnected -> "Connected: TV Dash and Bluetooth keyboard"
+        RemoteConnectionState.WiFiOnly -> "Connected: TV Dash (Bluetooth keyboard not set up)"
+        RemoteConnectionState.BluetoothOnly -> "Connected: Bluetooth keyboard only (TV Dash is closed)"
+        RemoteConnectionState.Disconnected -> "Looking for the TV..."
+    }
     Column(modifier) {
-        Text(
-            state.label,
-            style = MaterialTheme.typography.labelLarge,
-            color = if (state == TransportState.OFFLINE) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface
-        )
-        if (notice.isNotEmpty()) {
-            Text(notice, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text(label, style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurface)
+        if (hint.isNotEmpty()) {
+            Text(hint, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
     }
 }
 
 /** Setup for the Bluetooth fallback: allow Bluetooth, make the phone visible for pairing, choose the paired TV. */
 @Composable
-fun BluetoothFallbackPanel(manager: TransportManager, bluetooth: BluetoothHidTransport, modifier: Modifier = Modifier) {
+fun BluetoothFallbackPanel(bluetooth: BluetoothHidTransport, onChanged: () -> Unit, modifier: Modifier = Modifier) {
     var allowed by remember { mutableStateOf(bluetooth.hasPermission()) }
     var chosen by remember { mutableStateOf(bluetooth.targetName()) }
     var picking by remember { mutableStateOf(false) }
@@ -48,7 +50,7 @@ fun BluetoothFallbackPanel(manager: TransportManager, bluetooth: BluetoothHidTra
         allowed = bluetooth.hasPermission()
         if (allowed) {
             bluetooth.attach()
-            manager.retryBluetooth()
+            onChanged()
         }
     }
     val askVisible = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { }
@@ -73,7 +75,8 @@ fun BluetoothFallbackPanel(manager: TransportManager, bluetooth: BluetoothHidTra
         Text(
             "To pair once: tap Make phone visible, then on the TV open Settings > Remotes & accessories > Add accessory " +
                 "and select this phone. Then tap Choose TV and pick the TV. With TV Dash running, Bluetooth then carries " +
-                "everything Wi-Fi does (apps, YouTube search, Settings). If TV Dash is not running, only the basic keys work. " +
+                "everything Wi-Fi does (apps, YouTube search, Settings). If TV Dash is not running, the Bluetooth keyboard carries the " +
+                "basic keys and your typing (for example a Wi-Fi password). " +
                 "The TV asks once to allow Nearby devices for TV Dash: choose Allow.",
             style = MaterialTheme.typography.bodySmall
         )
@@ -92,7 +95,7 @@ fun BluetoothFallbackPanel(manager: TransportManager, bluetooth: BluetoothHidTra
                             bluetooth.targetAddress = device.address
                             chosen = bluetooth.targetName()
                             picking = false
-                            manager.retryBluetooth()
+                            onChanged()
                         }) { Text(bluetooth.nameOf(device)) }
                     }
                 }
