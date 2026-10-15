@@ -44,6 +44,12 @@ object RemoteStatus {
 
     /** A link is up, but none of the roads available now can do this request (for example a TV Dash feature while only Bluetooth is up). */
     const val UNAVAILABLE = "unavailable"
+
+    /** Power On only: no link is up, so the phone itself has to wake the TV (infrared, Wake-on-LAN). The screen runs that. */
+    const val WAKE_NEEDED = "wake"
+
+    /** Apps only: TV Dash answers, so the phone shows its own list of the TV's apps. */
+    const val LIST = "list"
 }
 
 /**
@@ -78,6 +84,11 @@ sealed class RemoteConnectionState {
  *    first: it needs neither TV Dash nor its accessibility service. If that link is down they go to TV Dash.
  *  - Home and Apps go to TV Dash first. If TV Dash is closed, or answers that it is blocked (accessibility or
  *    "Display over other apps" off), they are sent as the standard Home key and the standard All Apps key.
+ *  - Power On is decided by the state: with TV Dash answering (WiFiOnly, FullyConnected) it wakes the screen through TV
+ *    Dash; with only Bluetooth up it sends the power key silently, with no network step and no message; with no link at
+ *    all it answers [RemoteStatus.WAKE_NEEDED] and does not hold the press, because nothing is listening.
+ *  - Apps ([openApps]) is decided by the state too: TV Dash answering means the phone shows its own list of the TV's
+ *    apps; with only Bluetooth up it skips TV Dash and sends the All Apps key (Android's KEYCODE_ALL_APPS, 284).
  *  - Settings has no standard key (Android's generic key layout maps nothing to Settings). Over Bluetooth it is sent
  *    as the Meta+I shortcut, which newer Android versions use for Settings and an Android 14 TV may ignore, so TV Dash
  *    stays the reliable way. [hint] says so whenever a shortcut stood in for Settings or Apps.
@@ -266,6 +277,11 @@ class ConnectionManager(
      * is thrown and no error code from the TV is passed on.
      */
     suspend fun sendRemoteCommand(command: RemoteCommand): DeliveryResult = sendLock.withLock {
+        // Power On with no link at all: nothing is listening, so holding the press for 5 seconds would be pointless.
+        // The phone's own wake-up (infrared, Wake-on-LAN) is all that is left; the screen runs it.
+        if (command == RemoteCommand.POWER_ON && _state.value === RemoteConnectionState.Disconnected) {
+            return@withLock DeliveryResult.Delivered(RemoteStatus.WAKE_NEEDED)
+        }
         drainBufferLocked() // anything held earlier goes first, so the order of the presses is kept
         deliver(command) ?: run {
             hold(command)
@@ -274,7 +290,18 @@ class ConnectionManager(
     }
 
     /**
-     * Tries each road in order: the Bluetooth keyboard first for real keys, TV Dash first for Home and Apps. A road
+     * The Apps button, decided by the connection state. TV Dash answering (WiFiOnly, FullyConnected) returns
+     * [RemoteStatus.LIST]: the phone shows its own list of the TV's apps. Only Bluetooth up (BluetoothOnly) skips TV
+     * Dash and sends the All Apps key over the Bluetooth keyboard, silently. No link (Disconnected) holds that key for
+     * 5 seconds like any other button.
+     */
+    suspend fun openApps(): DeliveryResult = when (_state.value) {
+        RemoteConnectionState.FullyConnected, RemoteConnectionState.WiFiOnly -> DeliveryResult.Delivered(RemoteStatus.LIST)
+        RemoteConnectionState.BluetoothOnly, RemoteConnectionState.Disconnected -> sendRemoteCommand(RemoteCommand.APPS)
+    }
+
+    /**
+     * Tries each road in order: the Bluetooth keyboard first for real keys, TV Dash first for Home, Apps and Power On. A road
      * that is down, refuses the button, or answers that TV Dash is blocked is skipped silently.
      * Returns null when no link is up at all, so the caller holds the command.
      */
