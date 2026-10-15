@@ -419,6 +419,7 @@ class BluetoothHidTransport(context: Context) : RemoteTransport {
         RemoteCommand.REWIND -> Usage.Media(MEDIA_REWIND)
         RemoteCommand.FORWARD -> Usage.Media(MEDIA_FORWARD)
         RemoteCommand.POWER_OFF -> Usage.Media(MEDIA_POWER)
+        RemoteCommand.POWER_ON -> Usage.Media(MEDIA_POWER) // the same key: it wakes a sleeping TV
         RemoteCommand.APPS -> Usage.Media(MEDIA_ALL_APPS)
         // Android's key layout has no key for Settings, so this is the Meta+I shortcut. Newer Android versions open
         // Settings with it; an Android 14 TV may ignore it. TV Dash is the reliable way to open Settings.
