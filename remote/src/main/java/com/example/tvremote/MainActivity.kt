@@ -108,37 +108,46 @@ fun RemoteScreen() {
         scope.launch { connection.sendKeyboardPayload(path) }
     }
 
-    /** Power On: TV Dash answers when the TV is awake; otherwise try the phone's IR blaster, then Wake-on-LAN. */
+    /** No link to the TV: infrared if the phone has a blaster, then Wake-on-LAN. These messages belong to this case only. */
+    suspend fun wakeByPhone() {
+        fun say(m: String) = Toast.makeText(ctx, m, Toast.LENGTH_LONG).show()
+        // The link state can lag a moment behind. If TV Dash answers now, just wake the screen. The IR code is a
+        // toggle, so it must never be sent to a TV that is awake: it would switch it off.
+        if (link.get("ping") !is TvReply.Unreachable) {
+            send("power?s=on")
+            return
+        }
+        var why = "No IR blaster on this phone."
+        if (tvPower.hasIrEmitter()) {
+            if (!tvPower.verifyHardwareCompatibility()) {
+                why = "This phone's IR blaster can't send 38 kHz."
+            } else if (tvPower.transmitPowerToggle()) {
+                say("IR power signal sent. Point the phone's IR window at the TV.")
+                return
+            } else {
+                why = "The IR signal could not be sent."
+            }
+        }
+        val started = tvPower.executeWakeOnLanFlood(
+            mac,
+            stopWhen = { link.get("ping") !is TvReply.Unreachable }
+        ) { awake ->
+            say(if (awake) "The TV is awake." else "No answer after 45 seconds. This TV may not wake from the network.")
+        }
+        say(
+            if (started) "$why Wake-on-LAN started: one packet every 0.75 s for 45 s."
+            else "$why Add the TV's MAC address under Change TV to use Wake-on-LAN."
+        )
+    }
+
+    /**
+     * Power On. Layer 1 decides from the connection state: TV Dash wakes the screen when it answers; with only
+     * Bluetooth the power key is sent silently; only with no link at all does the phone try its own wake-up.
+     */
     fun powerOn() {
         scope.launch {
-            fun say(m: String) = Toast.makeText(ctx, m, Toast.LENGTH_LONG).show()
-            // The IR code is a toggle, so it must never be sent while the TV is awake: it would switch the TV off.
-            if (link.get("ping") !is TvReply.Unreachable) {
-                send("power?s=on")
-                say("The TV is already on. Waking the screen if it was dark.")
-                return@launch
-            }
-            var why = "No IR blaster on this phone."
-            if (tvPower.hasIrEmitter()) {
-                if (!tvPower.verifyHardwareCompatibility()) {
-                    why = "This phone's IR blaster can't send 38 kHz."
-                } else if (tvPower.transmitPowerToggle()) {
-                    say("IR power signal sent. Point the phone's IR window at the TV.")
-                    return@launch
-                } else {
-                    why = "The IR signal could not be sent."
-                }
-            }
-            val started = tvPower.executeWakeOnLanFlood(
-                mac,
-                stopWhen = { link.get("ping") !is TvReply.Unreachable }
-            ) { awake ->
-                say(if (awake) "The TV is awake." else "No answer after 45 seconds. This TV may not wake from the network.")
-            }
-            say(
-                if (started) "$why Wake-on-LAN started: one packet every 0.75 s for 45 s."
-                else "$why Add the TV's MAC address under Change TV to use Wake-on-LAN."
-            )
+            val status = (connection.sendRemoteCommand(RemoteCommand.POWER_ON) as? DeliveryResult.Delivered)?.reply
+            if (status == RemoteStatus.WAKE_NEEDED) wakeByPhone()
         }
     }
 
@@ -149,6 +158,17 @@ fun RemoteScreen() {
             val a = JSONArray(r)
             apps = List(a.length()) { a.getJSONObject(it).let { o -> o.getString("n") to o.getString("p") } }
             msg = ""
+        }
+    }
+
+    /** The Apps button: Layer 1 says whether to show the phone's own list (TV Dash answers) or has already sent the All Apps key. */
+    fun openApps() {
+        scope.launch {
+            val status = (connection.openApps() as? DeliveryResult.Delivered)?.reply
+            if (status == RemoteStatus.LIST) {
+                screen = "apps"
+                loadApps()
+            }
         }
     }
 
@@ -220,7 +240,7 @@ fun RemoteScreen() {
                     RemoteButton(Ico.Back, "Back", Modifier.weight(1f)) { press(RemoteCommand.BACK) }
                     RemoteButton(Ico.Home, "Home", Modifier.weight(1f)) { press(RemoteCommand.HOME) }
                     RemoteButton(Ico.Settings, "Settings", Modifier.weight(1f)) { press(RemoteCommand.SETTINGS) }
-                    RemoteButton(Ico.Apps, "Apps", Modifier.weight(1f)) { screen = "apps"; loadApps() }
+                    RemoteButton(Ico.Apps, "Apps", Modifier.weight(1f)) { openApps() }
                 }
                 // D-pad
                 Column(
