@@ -142,7 +142,8 @@ fun RemoteScreen() {
 
     /**
      * Power On. Layer 1 decides from the connection state: TV Dash wakes the screen when it answers; with only
-     * Bluetooth the power key is sent silently; only with no link at all does the phone try its own wake-up.
+     * Bluetooth the Wake Up key is sent silently (it never switches a TV off); only with no link at all does the
+     * phone try its own wake-up.
      */
     fun powerOn() {
         scope.launch {
