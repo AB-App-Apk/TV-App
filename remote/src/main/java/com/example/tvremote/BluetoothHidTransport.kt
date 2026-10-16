@@ -33,8 +33,10 @@ import java.io.IOException
  *
  * Arrow keys, Enter and typing are keyboard keys (Generic Desktop / Keyboard collection, keys on the Keyboard page).
  * Consumer Control (usage page 0x0C) has no D-pad, so it carries Home, Back, volume, power, the media keys and All Apps.
- * The two collections share one descriptor, told apart by report id (1 keyboard, 2 consumer). The descriptor is
- * unchanged on purpose: a TV may keep the one it saw at pairing.
+ * A third collection, System Control (report 3), carries Wake Up, so Power On can wake a TV without ever being able
+ * to switch it off. The three collections share one descriptor, told apart by report id. A TV remembers the descriptor
+ * it saw when the phone was paired: after this one changed, the phone must be forgotten on the TV and on the phone and
+ * paired again, or the TV ignores report 3.
  */
 @SuppressLint("MissingPermission") // Every Bluetooth call is guarded by hasPermission() or catches SecurityException.
 class BluetoothHidTransport(context: Context) : RemoteTransport {
@@ -43,6 +45,7 @@ class BluetoothHidTransport(context: Context) : RemoteTransport {
         private const val PREF_TARGET = "bt_target"
         private const val REPORT_KEYBOARD = 1
         private const val REPORT_CONSUMER = 2
+        private const val REPORT_SYSTEM = 3
 
         // Timing. A key is never pressed and released in the same instant, and the TV always sees a modifier
         // (Shift, Meta) change before the key it applies to.
@@ -62,6 +65,10 @@ class BluetoothHidTransport(context: Context) : RemoteTransport {
         private const val MOD_LEFT_SHIFT = 0x02
         private const val MOD_LEFT_META = 0x08
         private const val KEY_I = 0x0C
+
+        // System Control report (Generic Desktop page): one byte, bit 0 Power Down, bit 1 Sleep, bit 2 Wake Up.
+        // Wake Up becomes Android's KEYCODE_WAKEUP, which wakes a sleeping TV and does nothing to one that is awake.
+        private const val SYSTEM_WAKE_UP = 0x04
         private const val READY_TIMEOUT_MS = 2_500L
 
         /** How long to wait for the TV to open the HID channel. */
@@ -122,6 +129,18 @@ class BluetoothHidTransport(context: Context) : RemoteTransport {
             0x2A, 0xFF, 0x03,       //   Usage Maximum 1023
             0x75, 0x10, 0x95, 0x01, //   1 field of 16 bits
             0x81, 0x00,             //   Input (Data, Array)
+            0xC0,                   // End Collection
+            // --- System control: Power Down, Sleep, Wake Up as three bits (report 3) ---
+            0x05, 0x01,             // Usage Page (Generic Desktop)
+            0x09, 0x80,             // Usage (System Control)
+            0xA1, 0x01,             // Collection (Application)
+            0x85, REPORT_SYSTEM,    //   Report ID
+            0x19, 0x81, 0x29, 0x83, //   Usage Minimum/Maximum (System Power Down .. System Wake Up)
+            0x15, 0x00, 0x25, 0x01, //   Logical Minimum 0, Maximum 1
+            0x75, 0x01, 0x95, 0x03, //   3 fields of 1 bit
+            0x81, 0x02,             //   Input (Data, Variable, Absolute)
+            0x95, 0x05,             //   5 bits of padding
+            0x81, 0x01,             //   Input (Constant)
             0xC0                    // End Collection
         )
     }
@@ -130,6 +149,9 @@ class BluetoothHidTransport(context: Context) : RemoteTransport {
         /** A key on the keyboard page, with the modifier byte that must be down while it is pressed. */
         data class Key(val code: Int, val modifiers: Int = 0) : Usage
         data class Media(val code: Int) : Usage
+
+        /** A System Control key: [mask] is the bit (or bits) to set in the one-byte report. */
+        data class SystemKey(val mask: Int) : Usage
     }
 
     private val appContext = context.applicationContext
@@ -239,6 +261,7 @@ class BluetoothHidTransport(context: Context) : RemoteTransport {
                 val data = when (id.toInt()) {
                     REPORT_KEYBOARD -> ByteArray(8)
                     REPORT_CONSUMER -> ByteArray(2)
+                    REPORT_SYSTEM -> ByteArray(1)
                     0 -> if (bootProtocol) ByteArray(8) else null
                     else -> null
                 }
@@ -381,6 +404,7 @@ class BluetoothHidTransport(context: Context) : RemoteTransport {
                 when (usage) {
                     is Usage.Key -> typeKeys(proxy, device, listOf(usage))
                     is Usage.Media -> pressConsumer(proxy, device, usage.code)
+                    is Usage.SystemKey -> pressSystem(proxy, device, usage.mask)
                 }
             } catch (e: SecurityException) {
                 throw IOException("Bluetooth permission is missing", e)
@@ -419,7 +443,9 @@ class BluetoothHidTransport(context: Context) : RemoteTransport {
         RemoteCommand.REWIND -> Usage.Media(MEDIA_REWIND)
         RemoteCommand.FORWARD -> Usage.Media(MEDIA_FORWARD)
         RemoteCommand.POWER_OFF -> Usage.Media(MEDIA_POWER)
-        RemoteCommand.POWER_ON -> Usage.Media(MEDIA_POWER) // the same key: it wakes a sleeping TV
+        // Power On must never switch a TV off. The power key is a toggle, so On uses System Wake Up instead: it wakes
+        // a sleeping TV and does nothing to one that is already awake.
+        RemoteCommand.POWER_ON -> Usage.SystemKey(SYSTEM_WAKE_UP)
         RemoteCommand.APPS -> Usage.Media(MEDIA_ALL_APPS)
         // Android's key layout has no key for Settings, so this is the Meta+I shortcut. Newer Android versions open
         // Settings with it; an Android 14 TV may ignore it. TV Dash is the reliable way to open Settings.
@@ -494,6 +520,32 @@ class BluetoothHidTransport(context: Context) : RemoteTransport {
             withContext(NonCancellable) { releaseConsumer(proxy, device) }
         }
         delay(KEY_GAP_MS)
+    }
+
+    /** A System Control key (wake up): down for [KEY_HOLD_MS], then released. In boot mode the TV has no system keys. */
+    private suspend fun pressSystem(proxy: BluetoothHidDevice, device: BluetoothDevice, mask: Int) {
+        if (bootProtocol) throw IOException("The TV put the keyboard in boot mode, which has no system keys")
+        try {
+            if (!proxy.sendReport(device, REPORT_SYSTEM, byteArrayOf(mask.toByte()))) {
+                throw IOException("Bluetooth did not accept the wake-up key")
+            }
+            delay(KEY_HOLD_MS)
+        } finally {
+            withContext(NonCancellable) { releaseSystem(proxy, device) }
+        }
+        delay(KEY_GAP_MS)
+    }
+
+    private suspend fun releaseSystem(proxy: BluetoothHidDevice, device: BluetoothDevice) {
+        repeat(2) { attempt ->
+            try {
+                if (proxy.sendReport(device, REPORT_SYSTEM, ByteArray(1))) return
+            } catch (e: SecurityException) {
+                return
+            }
+            if (attempt == 0) delay(KEY_GAP_MS)
+        }
+        Log.w(TAG, "The TV did not accept the system key release")
     }
 
     /** All keyboard keys and modifiers up. Tried twice, because a release that is lost leaves a key stuck down. */
