@@ -85,8 +85,9 @@ sealed class RemoteConnectionState {
  *  - Home and Apps go to TV Dash first. If TV Dash is closed, or answers that it is blocked (accessibility or
  *    "Display over other apps" off), they are sent as the standard Home key and the standard All Apps key.
  *  - Power On is decided by the state: with TV Dash answering (WiFiOnly, FullyConnected) it wakes the screen through TV
- *    Dash; with only Bluetooth up it sends the power key silently, with no network step and no message; with no link at
- *    all it answers [RemoteStatus.WAKE_NEEDED] and does not hold the press, because nothing is listening.
+ *    Dash; with only Bluetooth up it sends the Wake Up key silently, with no network step and no message. Wake Up
+ *    only wakes a sleeping TV and does nothing to one that is awake, so On can never switch the TV off. With no link
+ *    at all it answers [RemoteStatus.WAKE_NEEDED] and does not hold the press, because nothing is listening.
  *  - Apps ([openApps]) is decided by the state too: TV Dash answering means the phone shows its own list of the TV's
  *    apps; with only Bluetooth up it skips TV Dash and sends the All Apps key (Android's KEYCODE_ALL_APPS, 284).
  *  - Settings has no standard key (Android's generic key layout maps nothing to Settings). Over Bluetooth it is sent
@@ -314,6 +315,10 @@ class ConnectionManager(
                     // Unsupported means the standard key layout has no key for this button (Settings): try TV Dash.
                     if (keyboardLink.sendCommand(command) is DeliveryResult.Delivered) {
                         if (command == RemoteCommand.SETTINGS || command == RemoteCommand.APPS) noteShortcutUsed(command)
+                        if (command == RemoteCommand.POWER_ON) {
+                            _hint.value = "Over Bluetooth, On sends the Wake Up key: it wakes a sleeping TV and does nothing to a TV that is on. " +
+                                "If it never wakes the TV, forget the phone on the TV and pair it again."
+                        }
                         return DeliveryResult.Delivered(RemoteStatus.OK)
                     }
                 } catch (e: IOException) {
