@@ -10,6 +10,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -48,9 +49,13 @@ import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import kotlinx.coroutines.delay
@@ -77,6 +82,9 @@ private val OnAmberBanner = Color(0xFF1F1300)
  * The keyboard panel keeps the request format that Layers 1 and 2 verified: it calls
  * [RemoteViewModel.onKeyboardInputChanged] after a 120 ms pause in typing, [RemoteViewModel.onKeyboardClosed] when
  * it closes, and sends the YouTube search through [youTube] when YouTube mode is on.
+ *
+ * The "Guidelines" button at the top opens a dialog with the Architectural State Ledger, the project's reference
+ * text. The text can be selected and copied.
  *
  * @param footer extra content shown under the remote (Bluetooth setup, app update). It is shown in only one place at a
  * time: under the remote, or inside the reconnecting card while that is up.
@@ -105,6 +113,7 @@ fun RemoteScreen(
 
     var showDisconnectAlert by rememberSaveable { mutableStateOf(false) }
     var showSetup by rememberSaveable { mutableStateOf(false) }
+    var showGuidelines by rememberSaveable { mutableStateOf(false) }
     var typing by rememberSaveable { mutableStateOf(false) }
     var text by rememberSaveable { mutableStateOf("") }
     var sent by rememberSaveable { mutableStateOf("") }
@@ -163,7 +172,13 @@ fun RemoteScreen(
                 RemoteConnectionState.BluetoothOnly,
                 RemoteConnectionState.Disconnected -> Unit
             }
-            ConnectionStrip(state, hint, Modifier.padding(horizontal = 16.dp, vertical = 8.dp))
+            Row(
+                Modifier.fillMaxWidth().padding(start = 16.dp, end = 8.dp, top = 8.dp, bottom = 8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                ConnectionStrip(state, hint, Modifier.weight(1f))
+                TextButton(onClick = { showGuidelines = true }) { Text("Guidelines") }
+            }
 
             Column(
                 Modifier
@@ -233,6 +248,8 @@ fun RemoteScreen(
             )
         }
     }
+
+    if (showGuidelines) GuidelinesDialog(onDismiss = { showGuidelines = false })
 
     if (showDisconnectAlert) {
         AlertDialog(
@@ -452,7 +469,7 @@ private fun KeyboardPanel(
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Switch(checked = youTubeMode, onCheckedChange = onYouTubeModeChange)
-            
+            Text("YouTube search (sent when you press Search; off = type live)", Modifier.padding(start = 8.dp))
         }
         OutlinedTextField(
             value = text,
@@ -466,4 +483,58 @@ private fun KeyboardPanel(
         )
         if (youTubeMode) SearchStatusLine(searchState, onRetry = onRetrySearch)
     }
+}
+
+// ------------------------------------------------------------------ guidelines
+
+/**
+ * The Architectural State Ledger, as supplied. Two statements were corrected to match how the app really works:
+ * the Bluetooth keyboard link needs API 28, and the Wake-on-LAN message appears only when the phone starts
+ * Wake-on-LAN itself (with no link at all), not whenever TV Dash is reachable.
+ */
+private val ARCHITECTURAL_STATE_LEDGER = """
+ARCHITECTURAL STATE LEDGER: DUAL-STACK ANDROID TV REMOTE (V2)
+Date: October 16, 2026
+System Status: Layer 1 Fully Specified & Patched | Layer 2 Blueprint Finalized
+
+1. PROJECT OVERVIEW & BASELINE CONSTRAINTS
+* Target Platform: Android TV Remote Companion App.
+* Minimum SDK Baseline: API 26+ (Android 8.0). The Bluetooth HID keyboard link itself needs API 28+ (Android 9); on an older phone the remote uses TV Dash only.
+* Architecture: Jetpack Compose, Android Architecture Components, Kotlin Coroutines, and asynchronous Flow.
+
+2. CRITICAL PRESERVATION RULES
+* Virtual Keyboard Input Logic: Working flawlessly. Payload structure: text?t=<all text so far>&enter=0|1 and text?done=1.
+* Abstract Transport Handling: Infrastructure UI prompts remain fully abstracted within Layer 1.
+
+3. ARCHITECTURAL STATE & COMPONENT BLUEPRINTS
+* Layer 1 (ConnectionManager.kt): Emits FullyConnected, BluetoothOnly, WiFiOnly, and Disconnected (with a 5-second FIFO buffer up to 10 commands).
+* Apps Button Forwarding: Intercepts BluetoothOnly to downgrade and emit native KeyEvent.KEYCODE_ALL_APPS (284).
+* Power-On State Gating: WiFiOnly/FullyConnected wake the TV through TV Dash; the Wake-on-LAN toast appears only when the phone starts Wake-on-LAN itself (no link at all). BluetoothOnly runs completely silently.
+* Layer 2 (RemoteViewModel.kt): Exposes read-only StateFlow and SharedFlow<UIEvent>. Strongly typed handlers instead of generic indices.
+""".trimIndent()
+
+/** The ledger with its title and numbered section headings in bold. */
+private val ledgerText: AnnotatedString = buildAnnotatedString {
+    ARCHITECTURAL_STATE_LEDGER.lines().forEachIndexed { index, line ->
+        if (index > 0) append('\n')
+        val heading = line.startsWith("ARCHITECTURAL STATE LEDGER") || (line.isNotEmpty() && line[0].isDigit())
+        if (heading) withStyle(SpanStyle(fontWeight = FontWeight.Bold)) { append(line) } else append(line)
+    }
+}
+
+/** The reference text in a scrollable dialog. Hold a line to select and copy. */
+@Composable
+private fun GuidelinesDialog(onDismiss: () -> Unit) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Guidelines") },
+        text = {
+            SelectionContainer {
+                Column(Modifier.heightIn(max = 420.dp).verticalScroll(rememberScrollState())) {
+                    Text(ledgerText, style = MaterialTheme.typography.bodySmall)
+                }
+            }
+        },
+        confirmButton = { TextButton(onClick = onDismiss) { Text("Close") } }
+    )
 }
