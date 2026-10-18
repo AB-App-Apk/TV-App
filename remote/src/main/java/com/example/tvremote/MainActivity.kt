@@ -3,6 +3,7 @@ package com.example.tvremote
 import android.content.Context
 import android.content.SharedPreferences
 import android.os.Bundle
+import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
@@ -181,26 +182,62 @@ fun RemoteApp(graph: RemoteGraph, viewModel: RemoteViewModel) {
             onOpenAppsList = { screen = "apps"; loadApps() },
             onChangeTv = { editing = true },
             notice = msg,
-            footer = {
+            footer = { openGuidelines ->
                 BluetoothFallbackPanel(graph.bluetooth, onChanged = { graph.connection.retryKeyboard() })
-                UpdateRow(upd, scope)
+                UpdateRow(upd, scope, onGuidelines = openGuidelines)
             }
         )
     }
 }
 
-/** The app version and the update button. */
+/**
+ * The bottom strip: "Guidelines" (only where a handler is given) and "Check for updates" side by side.
+ *
+ * There is no status label. The result of a check or an update is told once, as a short message, and is then gone:
+ * "Up to date" when the app is current. When a newer build exists the button itself turns into "Update", and while
+ * something is running it shows what is happening.
+ */
 @Composable
-private fun UpdateRow(upd: UpdateController, scope: CoroutineScope) {
-    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        Text(
-            upd.status.ifEmpty { "Build ${upd.installed}" },
-            style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1f)
-        )
+private fun UpdateRow(upd: UpdateController, scope: CoroutineScope, onGuidelines: (() -> Unit)? = null) {
+    val ctx = LocalContext.current
+    fun tell(message: String, long: Boolean = true) {
+        Toast.makeText(ctx, message, if (long) Toast.LENGTH_LONG else Toast.LENGTH_SHORT).show()
+    }
+    // The installer reports back after the tap, with a failure or a success. Those results arrive later, so watch for them.
+    LaunchedEffect(upd.status) {
+        if (upd.status.startsWith("Install failed") || upd.status.startsWith("Updated.")) tell(upd.status)
+    }
+    Row(
+        Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        if (onGuidelines != null) {
+            OutlinedButton(onClick = onGuidelines, modifier = Modifier.weight(1f)) { Text("Guidelines", maxLines = 1) }
+        }
         OutlinedButton(
-            onClick = { scope.launch { if (upd.available) upd.update() else upd.check() } },
-            enabled = !upd.busy
-        ) { Text(if (upd.available) "Update" else "Check for updates") }
+            onClick = {
+                scope.launch {
+                    if (upd.available) upd.update() else upd.check()
+                    val result = upd.status
+                    when {
+                        result == "Up to date" -> tell("Up to date", long = false)
+                        result.isNotEmpty() && !result.startsWith("Checking") && !result.startsWith("Downloading") -> tell(result)
+                    }
+                }
+            },
+            enabled = !upd.busy,
+            modifier = Modifier.weight(1f)
+        ) {
+            Text(
+                when {
+                    upd.busy -> upd.status.ifEmpty { "Please wait..." }
+                    upd.available -> "Update"
+                    else -> "Check for updates"
+                },
+                maxLines = 1
+            )
+        }
     }
 }
 
