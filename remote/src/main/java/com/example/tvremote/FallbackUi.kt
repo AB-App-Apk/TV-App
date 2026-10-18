@@ -69,7 +69,7 @@ fun BluetoothFallbackPanel(bluetooth: BluetoothHidTransport, onChanged: () -> Un
             else ->
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     OutlinedButton(onClick = { picking = true }) { Text("Choose TV") }
-                    OutlinedButton(onClick = { askVisible.launch(bluetooth.discoverableIntent()) }) { Text("Make phone visible") }
+                    OutlinedButton(onClick = { askVisible.launch(bluetooth.discoverableIntent()) }) { Text("Discoverable") }
                 }
         }
         Text(
