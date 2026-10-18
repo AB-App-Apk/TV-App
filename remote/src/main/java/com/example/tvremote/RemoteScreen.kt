@@ -83,11 +83,13 @@ private val OnAmberBanner = Color(0xFF1F1300)
  * [RemoteViewModel.onKeyboardInputChanged] after a 120 ms pause in typing, [RemoteViewModel.onKeyboardClosed] when
  * it closes, and sends the YouTube search through [youTube] when YouTube mode is on.
  *
- * The "Guidelines" button at the top opens a dialog with the Architectural State Ledger, the project's reference
- * text. The text can be selected and copied.
+ * The top strip holds the connection status and a "How to pair" button that opens the Bluetooth pairing steps.
+ * The "Guidelines" button lives in the bottom strip, next to "Check for updates". It opens a dialog with the
+ * Architectural State Ledger, the project's reference text, which can be selected and copied.
  *
- * @param footer extra content shown under the remote (Bluetooth setup, app update). It is shown in only one place at a
- * time: under the remote, or inside the reconnecting card while that is up.
+ * @param footer the bottom strip (Bluetooth setup, Guidelines, app update). It is given a function that opens the
+ * Guidelines dialog. It is shown in only one place at a time: under the remote, or inside the reconnecting card while
+ * that is up.
  * @param notice an error line shown under the connection status, empty for none.
  */
 @OptIn(ExperimentalComposeUiApi::class)
@@ -101,7 +103,7 @@ fun RemoteScreen(
     onChangeTv: () -> Unit,
     modifier: Modifier = Modifier,
     notice: String = "",
-    footer: @Composable ColumnScope.() -> Unit = {}
+    footer: @Composable ColumnScope.(onGuidelines: () -> Unit) -> Unit = {}
 ) {
     val state by viewModel.connectionState.collectAsStateWithLifecycle()
     val hint by viewModel.hint.collectAsStateWithLifecycle()
@@ -114,6 +116,7 @@ fun RemoteScreen(
     var showDisconnectAlert by rememberSaveable { mutableStateOf(false) }
     var showSetup by rememberSaveable { mutableStateOf(false) }
     var showGuidelines by rememberSaveable { mutableStateOf(false) }
+    var showHowToPair by rememberSaveable { mutableStateOf(false) }
     var typing by rememberSaveable { mutableStateOf(false) }
     var text by rememberSaveable { mutableStateOf("") }
     var sent by rememberSaveable { mutableStateOf("") }
@@ -122,7 +125,11 @@ fun RemoteScreen(
     // The footer holds setup screens with their own state, so it moves between the remote and the reconnecting card
     // without being rebuilt, and is never on screen twice.
     val footerHost = remember {
-        movableContentOf { Column(verticalArrangement = Arrangement.spacedBy(12.dp)) { currentFooter(this) } }
+        movableContentOf {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                currentFooter(this, { showGuidelines = true })
+            }
+        }
     }
 
     // One-time events from the ViewModel.
@@ -177,7 +184,7 @@ fun RemoteScreen(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 ConnectionStrip(state, hint, Modifier.weight(1f))
-                TextButton(onClick = { showGuidelines = true }) { Text("Guidelines") }
+                OutlinedButton(onClick = { showHowToPair = true }) { Text("How to pair") }
             }
 
             Column(
@@ -250,6 +257,7 @@ fun RemoteScreen(
     }
 
     if (showGuidelines) GuidelinesDialog(onDismiss = { showGuidelines = false })
+    if (showHowToPair) HowToPairDialog(onDismiss = { showHowToPair = false })
 
     if (showDisconnectAlert) {
         AlertDialog(
@@ -533,6 +541,39 @@ private fun GuidelinesDialog(onDismiss: () -> Unit) {
                 Column(Modifier.heightIn(max = 420.dp).verticalScroll(rememberScrollState())) {
                     Text(ledgerText, style = MaterialTheme.typography.bodySmall)
                 }
+            }
+        },
+        confirmButton = { TextButton(onClick = onDismiss) { Text("Close") } }
+    )
+}
+
+// ------------------------------------------------------------------ how to pair
+
+/**
+ * The steps to pair the phone with the TV so the Bluetooth keyboard link works. The button names are the ones on the
+ * Bluetooth setup panel under the remote.
+ */
+@Composable
+private fun HowToPairDialog(onDismiss: () -> Unit) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("How to pair") },
+        text = {
+            Column(
+                Modifier.heightIn(max = 420.dp).verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                Text("Pairing lets the phone act as a Bluetooth keyboard for the TV. It keeps the basic keys and typing working when TV Dash is closed.")
+                Text("1. Under the remote, open Bluetooth setup and tap Allow Bluetooth (Nearby devices). Accept the question.")
+                Text("2. On the TV, open Settings > Remotes & accessories and choose Add accessory. The wording differs a little between TVs.")
+                Text("3. On the phone, tap Make phone visible and allow it. Select the phone in the TV's list and confirm the code on both screens.")
+                Text("4. In the remote, tap Choose TV and pick your TV.")
+                Text("5. When it works, the line at the top says Bluetooth keyboard.")
+                Text(
+                    "If the TV stops reacting after an app update, remove the phone on the TV and the TV in the phone's Bluetooth settings, then pair again.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
             }
         },
         confirmButton = { TextButton(onClick = onDismiss) { Text("Close") } }
