@@ -452,7 +452,7 @@ private fun KeyboardPanel(
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Switch(checked = youTubeMode, onCheckedChange = onYouTubeModeChange)
-            Text("YouTube search (sent when you press Search; off = type live)", Modifier.padding(start = 8.dp))
+            
         }
         OutlinedTextField(
             value = text,
