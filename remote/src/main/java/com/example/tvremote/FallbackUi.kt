@@ -73,7 +73,7 @@ fun BluetoothFallbackPanel(bluetooth: BluetoothHidTransport, onChanged: () -> Un
                 }
         }
         Text(
-            "To pair once: tap Make phone visible, then on the TV open Settings > Remotes & accessories > Add accessory " +
+            "To pair once: tap Go visible, then on the TV open Settings > Remotes & accessories > Add accessory " +
                 "and select this phone. Then tap Choose TV and pick the TV. With TV Dash running, Bluetooth then carries " +
                 "everything Wi-Fi does (apps, YouTube search, Settings). If TV Dash is not running, the Bluetooth keyboard carries the " +
                 "basic keys and your typing (for example a Wi-Fi password). " +
