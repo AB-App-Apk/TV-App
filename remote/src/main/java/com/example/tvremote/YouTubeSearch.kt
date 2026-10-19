@@ -132,7 +132,7 @@ fun SearchStatusLine(state: SearchState, onRetry: () -> Unit, modifier: Modifier
                 message, Modifier.weight(1f), style = MaterialTheme.typography.bodySmall,
                 color = if (failed != null) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant
             )
-            if (failed?.reason?.retryable == true) TextButton(onClick = onRetry) { Text("Retry") }
+            if (failed?.reason?.retryable == true) FitTextButton(label = "Retry", onClick = onRetry)
         }
     }
 }
