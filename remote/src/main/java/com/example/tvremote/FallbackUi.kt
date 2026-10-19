@@ -26,9 +26,9 @@ fun ConnectionStatusLine(manager: ConnectionManager, modifier: Modifier = Modifi
     val state by manager.state.collectAsState()
     val hint by manager.hint.collectAsState()
     val label = when (state) {
-        RemoteConnectionState.FullyConnected -> "Connected: TV Dash and Bluetooth keyboard"
-        RemoteConnectionState.WiFiOnly -> "Connected: TV Dash (Bluetooth keyboard not set up)"
-        RemoteConnectionState.BluetoothOnly -> "Connected: Bluetooth keyboard only (TV Dash is closed)"
+        RemoteConnectionState.FullyConnected -> "Connected: FullyConnected[Wi-Fi/Bluetooth]"
+        RemoteConnectionState.WiFiOnly -> "Connected: WiFiOnly[TV Dash]"
+        RemoteConnectionState.BluetoothOnly -> "Connected: BluetoothOnly[Keyboard]"
         RemoteConnectionState.Disconnected -> "Looking for the TV..."
     }
     Column(modifier) {
