@@ -158,7 +158,8 @@ fun RemoteApp(graph: RemoteGraph, viewModel: RemoteViewModel) {
                 supportingText = { Text("TV Settings > Device Preferences > About > Status") },
                 singleLine = true, modifier = Modifier.fillMaxWidth()
             )
-            Button(
+            FitButton(
+                label = "Connect",
                 onClick = {
                     if (mac.isNotBlank() && graph.tvPower.parseMac(mac) == null) {
                         msg = "The MAC address needs 12 hex digits, like AA:BB:CC:DD:EE:FF."
@@ -170,7 +171,7 @@ fun RemoteApp(graph: RemoteGraph, viewModel: RemoteViewModel) {
                     }
                 },
                 modifier = Modifier.fillMaxWidth()
-            ) { Text("Connect") }
+            )
             UpdateRow(upd, scope)
         }
     } else {
@@ -213,9 +214,14 @@ private fun UpdateRow(upd: UpdateController, scope: CoroutineScope, onGuidelines
         verticalAlignment = Alignment.CenterVertically
     ) {
         if (onGuidelines != null) {
-            OutlinedButton(onClick = onGuidelines, modifier = Modifier.weight(1f)) { Text("Guidelines", maxLines = 1) }
+            FitOutlinedButton(label = "Guidelines", onClick = onGuidelines, modifier = Modifier.weight(1f))
         }
-        OutlinedButton(
+        FitOutlinedButton(
+            label = when {
+                upd.busy -> upd.status.ifEmpty { "Please wait..." }
+                upd.available -> "Update"
+                else -> "Check for updates"
+            },
             onClick = {
                 scope.launch {
                     if (upd.available) upd.update() else upd.check()
@@ -228,16 +234,7 @@ private fun UpdateRow(upd: UpdateController, scope: CoroutineScope, onGuidelines
             },
             enabled = !upd.busy,
             modifier = Modifier.weight(1f)
-        ) {
-            Text(
-                when {
-                    upd.busy -> upd.status.ifEmpty { "Please wait..." }
-                    upd.available -> "Update"
-                    else -> "Check for updates"
-                },
-                maxLines = 1
-            )
-        }
+        )
     }
 }
 
@@ -256,10 +253,11 @@ fun AppsPage(apps: List<Pair<String, String>>, msg: String, onBack: () -> Unit, 
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             items(apps) { (name, pkg) ->
-                OutlinedButton(
+                FitOutlinedButton(
+                    label = name,
                     onClick = { onLaunch(pkg) },
                     modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp)
-                ) { Text(name, maxLines = 1) }
+                )
             }
         }
     }
