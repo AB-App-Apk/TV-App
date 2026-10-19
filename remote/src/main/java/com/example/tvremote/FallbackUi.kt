@@ -5,6 +5,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
@@ -26,9 +27,9 @@ fun ConnectionStatusLine(manager: ConnectionManager, modifier: Modifier = Modifi
     val state by manager.state.collectAsState()
     val hint by manager.hint.collectAsState()
     val label = when (state) {
-        RemoteConnectionState.FullyConnected -> "Connected: FullyConnected[Wi-Fi/Bluetooth]"
-        RemoteConnectionState.WiFiOnly -> "Connected: WiFiOnly[TV Dash]"
-        RemoteConnectionState.BluetoothOnly -> "Connected: BluetoothOnly[Keyboard]"
+        RemoteConnectionState.FullyConnected -> "Connected: TV Dash and Bluetooth keyboard"
+        RemoteConnectionState.WiFiOnly -> "Connected: TV Dash (Bluetooth keyboard not set up)"
+        RemoteConnectionState.BluetoothOnly -> "Connected: Bluetooth keyboard only (TV Dash is closed)"
         RemoteConnectionState.Disconnected -> "Looking for the TV..."
     }
     Column(modifier) {
@@ -65,15 +66,23 @@ fun BluetoothFallbackPanel(bluetooth: BluetoothHidTransport, onChanged: () -> Un
             !bluetooth.isSupported() ->
                 Text("This phone can't act as a Bluetooth keyboard (needs Android 9 or newer).", style = MaterialTheme.typography.bodySmall)
             !allowed ->
-                Button(onClick = { askPermission.launch(bluetooth.requiredPermissions()) }) { Text("Allow Bluetooth (Nearby devices)") }
+                FitButton(
+                    label = "Allow Bluetooth (Nearby devices)",
+                    onClick = { askPermission.launch(bluetooth.requiredPermissions()) },
+                    modifier = Modifier.fillMaxWidth()
+                )
             else ->
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedButton(onClick = { picking = true }) { Text("Choose TV") }
-                    OutlinedButton(onClick = { askVisible.launch(bluetooth.discoverableIntent()) }) { Text("Go visible") }
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    FitOutlinedButton(label = "Choose TV", onClick = { picking = true }, modifier = Modifier.weight(1f))
+                    FitOutlinedButton(
+                        label = "Make phone visible",
+                        onClick = { askVisible.launch(bluetooth.discoverableIntent()) },
+                        modifier = Modifier.weight(1f)
+                    )
                 }
         }
         Text(
-            "To pair once: tap Go visible, then on the TV open Settings > Remotes & accessories > Add accessory " +
+            "To pair once: tap Make phone visible, then on the TV open Settings > Remotes & accessories > Add accessory " +
                 "and select this phone. Then tap Choose TV and pick the TV. With TV Dash running, Bluetooth then carries " +
                 "everything Wi-Fi does (apps, YouTube search, Settings). If TV Dash is not running, the Bluetooth keyboard carries the " +
                 "basic keys and your typing (for example a Wi-Fi password). " +
@@ -91,16 +100,20 @@ fun BluetoothFallbackPanel(bluetooth: BluetoothHidTransport, onChanged: () -> Un
                 Column {
                     if (devices.isEmpty()) Text("No paired Bluetooth devices yet. Pair the phone with the TV first.")
                     devices.forEach { device ->
-                        TextButton(onClick = {
-                            bluetooth.targetAddress = device.address
-                            chosen = bluetooth.targetName()
-                            picking = false
-                            onChanged()
-                        }) { Text(bluetooth.nameOf(device)) }
+                        FitTextButton(
+                            label = bluetooth.nameOf(device),
+                            onClick = {
+                                bluetooth.targetAddress = device.address
+                                chosen = bluetooth.targetName()
+                                picking = false
+                                onChanged()
+                            },
+                            modifier = Modifier.fillMaxWidth()
+                        )
                     }
                 }
             },
-            confirmButton = { TextButton(onClick = { picking = false }) { Text("Cancel") } }
+            confirmButton = { FitTextButton(label = "Cancel", onClick = { picking = false }) }
         )
     }
 }
