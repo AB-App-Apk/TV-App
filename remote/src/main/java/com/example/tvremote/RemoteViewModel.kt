@@ -6,9 +6,11 @@ import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import java.net.URLEncoder
 
@@ -124,6 +126,17 @@ class RemoteViewModel(
     /** A plain sentence about why something is not working, for a status line. Empty when there is nothing to say. Safe to ignore. */
     val hint: StateFlow<String> = connection.hint
 
+    private val _isTvPoweredOff = MutableStateFlow(true)
+
+    /**
+     * True while the TV is presumed to be off, so having no connection is expected and is not a fault.
+     *  - It starts true: nothing has answered yet, and the person may have opened the remote to switch the TV on.
+     *  - It becomes true when this remote switches the TV off, before the connection drops.
+     *  - It becomes false when the TV answers again: any link returning after a total loss, or both links up at once.
+     * The screen uses it to keep the "looking for the TV" overlay from covering the Power On button.
+     */
+    val isTvPoweredOff: StateFlow<Boolean> = _isTvPoweredOff.asStateFlow()
+
     private val _events = MutableSharedFlow<UIEvent>(
         replay = 0,
         extraBufferCapacity = 32,
@@ -144,12 +157,21 @@ class RemoteViewModel(
         connection.start()
 
         // Tell the screen when the connection drops. The state at the start is Disconnected, so there is no alert
-        // until a connection has actually been up and then lost.
+        // until a connection has actually been up and then lost. A drop caused by switching the TV off is expected,
+        // so it gets no alert either.
         viewModelScope.launch {
             var previous: RemoteConnectionState = connection.state.value
             connection.state.collect { now ->
-                if (now === RemoteConnectionState.Disconnected && previous !== RemoteConnectionState.Disconnected) {
+                if (now === RemoteConnectionState.Disconnected && previous !== RemoteConnectionState.Disconnected &&
+                    !_isTvPoweredOff.value
+                ) {
                     _events.tryEmit(UIEvent.ShowDisconnectAlert)
+                }
+                // The TV has answered, so it is on: both links are up, or a link came back after a total loss.
+                if (now === RemoteConnectionState.FullyConnected ||
+                    (previous === RemoteConnectionState.Disconnected && now !== RemoteConnectionState.Disconnected)
+                ) {
+                    _isTvPoweredOff.value = false
                 }
                 previous = now
             }
@@ -183,8 +205,20 @@ class RemoteViewModel(
         }
     }
 
+    /**
+     * Power Off. The connection is about to drop because the TV is switching off, so [isTvPoweredOff] is set first and
+     * the screen never treats that drop as a fault. If the TV did not switch off (the command failed and it still
+     * answers), the flag goes back.
+     */
     fun onPowerOffClicked() {
-        press(RemoteCommand.POWER_OFF)
+        viewModelScope.launch {
+            _isTvPoweredOff.value = true
+            if (send(RemoteCommand.POWER_OFF) == RemoteStatus.OK) {
+                haptic()
+            } else if (connection.state.value !== RemoteConnectionState.Disconnected) {
+                _isTvPoweredOff.value = false
+            }
+        }
     }
 
     private suspend fun powerSilently() {
