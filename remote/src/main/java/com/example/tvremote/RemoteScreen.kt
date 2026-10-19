@@ -298,9 +298,9 @@ private fun WifiOnlyBanner(modifier: Modifier = Modifier) {
 }
 
 private fun statusLabel(state: RemoteConnectionState): String = when (state) {
-    RemoteConnectionState.FullyConnected -> "Connected: TV Dash and Bluetooth keyboard"
-    RemoteConnectionState.WiFiOnly -> "Connected: TV Dash only"
-    RemoteConnectionState.BluetoothOnly -> "Connected: Bluetooth keyboard only (TV Dash is closed)"
+    RemoteConnectionState.FullyConnected -> "Connected: FullyConnected[Wi-Fi/Bluetooth]"
+    RemoteConnectionState.WiFiOnly -> "Connected: WiFiOnly[TV Dash]"
+    RemoteConnectionState.BluetoothOnly -> "Connected: BluetoothOnly[Keyboard]"
     RemoteConnectionState.Disconnected -> "Looking for the TV..."
 }
 
