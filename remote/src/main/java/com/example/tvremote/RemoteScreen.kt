@@ -74,7 +74,9 @@ private val OnAmberBanner = Color(0xFF1F1300)
  *  - WiFiOnly: the whole remote, with an amber banner anchored at the top (it does not scroll away).
  *  - BluetoothOnly: the whole remote, no change. Layer 1 and 2 handle the routing silently.
  *  - Disconnected: the remote is blurred behind a dimmed full-screen "looking for the TV" card with a progress circle.
- *    The card has "Change TV" and "Bluetooth setup" so a lost connection can always be fixed from here.
+ *    The card has "Change TV" and "Bluetooth setup" so a lost connection can always be fixed from here. It appears only
+ *    for a real loss: both links gone and the TV not simply switched off. A TV that is off has no links either, and
+ *    the card would then cover the Power On button.
  *
  * One-time events from the ViewModel are collected in one effect: haptic tap, toast, the connection-lost dialog, and
  * opening the apps list.
@@ -107,6 +109,7 @@ fun RemoteScreen(
 ) {
     val state by viewModel.connectionState.collectAsStateWithLifecycle()
     val hint by viewModel.hint.collectAsStateWithLifecycle()
+    val tvPoweredOff by viewModel.isTvPoweredOff.collectAsStateWithLifecycle()
     val searchState by youTube.state.collectAsStateWithLifecycle()
     val context = LocalContext.current
     val haptic = LocalHapticFeedback.current
@@ -146,10 +149,7 @@ fun RemoteScreen(
 
     // The connection-lost dialog has no use once the connection is back.
     LaunchedEffect(state) {
-        if (state !== RemoteConnectionState.Disconnected) {
-            showDisconnectAlert = false
-            showSetup = false
-        }
+        if (state !== RemoteConnectionState.Disconnected) showDisconnectAlert = false
     }
 
     // Stream what is typed on the phone keyboard to the TV. The short pause batches fast typing. The request text is
@@ -162,13 +162,22 @@ fun RemoteScreen(
         }
     }
 
-    val disconnected = state === RemoteConnectionState.Disconnected
+    // Layer 1 reports both links in one state, and each link is up in two of the four states.
+    val isBluetoothConnected = state === RemoteConnectionState.FullyConnected || state === RemoteConnectionState.BluetoothOnly
+    val isNetworkConnected = state === RemoteConnectionState.FullyConnected || state === RemoteConnectionState.WiFiOnly
+
+    // The reconnecting overlay is for a real loss only: BOTH links gone AND the TV not simply switched off. A TV that
+    // is off has no links either, so without the last test the overlay would cover the Power On button.
+    val showReconnecting = !isBluetoothConnected && !isNetworkConnected && !tvPoweredOff
+
+    // The setup section inside the overlay closes with it.
+    LaunchedEffect(showReconnecting) { if (!showReconnecting) showSetup = false }
 
     Box(modifier.fillMaxSize()) {
         Column(
             Modifier
                 .fillMaxSize()
-                .then(if (disconnected) Modifier.blur(6.dp) else Modifier)
+                .then(if (showReconnecting) Modifier.blur(6.dp) else Modifier)
                 .systemBarsPadding()
                 .imePadding()
         ) {
@@ -241,11 +250,11 @@ fun RemoteScreen(
                 }
 
                 FitTextButton(label = "Change TV", onClick = onChangeTv)
-                if (!disconnected) footerHost()
+                if (!showReconnecting) footerHost()
             }
         }
 
-        if (disconnected) {
+        if (showReconnecting) {
             ReconnectingOverlay(
                 hint = hint,
                 showSetup = showSetup,
@@ -298,9 +307,9 @@ private fun WifiOnlyBanner(modifier: Modifier = Modifier) {
 }
 
 private fun statusLabel(state: RemoteConnectionState): String = when (state) {
-    RemoteConnectionState.FullyConnected -> "Status: FullyConnected"
-    RemoteConnectionState.WiFiOnly -> "Status: WiFiOnly"
-    RemoteConnectionState.BluetoothOnly -> "Status: BluetoothOnly"
+    RemoteConnectionState.FullyConnected -> "Connected: TV Dash and Bluetooth keyboard"
+    RemoteConnectionState.WiFiOnly -> "Connected: TV Dash only"
+    RemoteConnectionState.BluetoothOnly -> "Connected: Bluetooth keyboard only (TV Dash is closed)"
     RemoteConnectionState.Disconnected -> "Looking for the TV..."
 }
 
