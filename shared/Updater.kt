@@ -62,7 +62,7 @@ class UpdateController(private val ctx: Context, private val apkName: String) {
             try { open("version.txt").inputStream.bufferedReader().readText().trim().toInt() } catch (e: Exception) { null }
         }
         busy = false
-        if (v == null) { status = "Can't check for updates (is the GitHub repo public?)"; return }
+        if (v == null) { status = "Can't check for updates"; return }
         latest = v
         status = if (v > installed) "Update available: build $v. Select to install." else "Up to date"
     }
