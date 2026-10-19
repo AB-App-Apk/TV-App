@@ -184,7 +184,8 @@ fun RemoteScreen(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 ConnectionStrip(state, hint, Modifier.weight(1f))
-                FitOutlinedButton(label = "How to pair", onClick = { showHowToPair = true })
+                FitOutlinedButton(label = "How to pair", onClick = { showHowToPair = true }, modifier = Modifier.height(36.dp)
+ )
             }
 
             Column(
