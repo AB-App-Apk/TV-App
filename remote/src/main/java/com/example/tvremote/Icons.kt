@@ -25,6 +25,7 @@ import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.graphics.drawscope.scale
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 
 /** Remote icons, drawn natively in the shapes of Material Symbols (home, settings, apps, keyboard, ...). */
 enum class Ico { Back, Home, Settings, Apps, Keyboard, Up, Down, Left, Right, Forward, Rewind }
@@ -74,7 +75,7 @@ fun RemoteButton(icon: Ico, label: String, modifier: Modifier = Modifier, onClic
     FilledTonalButton(onClick = onClick, modifier = modifier.heightIn(min = 68.dp), contentPadding = PaddingValues(4.dp)) {
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
             RIcon(icon, LocalContentColor.current)
-            Text(label, style = MaterialTheme.typography.labelMedium, maxLines = 1)
+            FitText(label, style = MaterialTheme.typography.labelMedium, minFontSize = 9.sp)
         }
     }
 }
