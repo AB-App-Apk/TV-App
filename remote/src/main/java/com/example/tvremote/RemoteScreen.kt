@@ -184,10 +184,7 @@ fun RemoteScreen(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 ConnectionStrip(state, hint, Modifier.weight(1f))
-                OutlinedButton(onClick = { showHowToPair = true },contentPadding = PaddingValues(
-        horizontal = 18.dp,
-        vertical = 6.dp
-    )) { Text("How to pair") }
+                FitOutlinedButton(label = "How to pair", onClick = { showHowToPair = true })
             }
 
             Column(
@@ -243,7 +240,7 @@ fun RemoteScreen(
                     KeyboardPlaceholder()
                 }
 
-                TextButton(onClick = onChangeTv) { Text("Change TV") }
+                FitTextButton(label = "Change TV", onClick = onChangeTv)
                 if (!disconnected) footerHost()
             }
         }
@@ -272,7 +269,7 @@ fun RemoteScreen(
                         "Buttons pressed in the next few seconds are held and sent as soon as the link returns."
                 )
             },
-            confirmButton = { TextButton(onClick = { showDisconnectAlert = false }) { Text("OK") } }
+            confirmButton = { FitTextButton(label = "OK", onClick = { showDisconnectAlert = false }) }
         )
     }
 }
@@ -301,9 +298,9 @@ private fun WifiOnlyBanner(modifier: Modifier = Modifier) {
 }
 
 private fun statusLabel(state: RemoteConnectionState): String = when (state) {
-    RemoteConnectionState.FullyConnected -> "Connected: FullyConnected[Wi-Fi/Bluetooth]"
-    RemoteConnectionState.WiFiOnly -> "Connected: WiFiOnly[TV Dash]"
-    RemoteConnectionState.BluetoothOnly -> "Connected: BluetoothOnly[Keyboard]"
+    RemoteConnectionState.FullyConnected -> "Connected: TV Dash and Bluetooth keyboard"
+    RemoteConnectionState.WiFiOnly -> "Connected: TV Dash only"
+    RemoteConnectionState.BluetoothOnly -> "Connected: Bluetooth keyboard only (TV Dash is closed)"
     RemoteConnectionState.Disconnected -> "Looking for the TV..."
 }
 
@@ -365,9 +362,13 @@ private fun ReconnectingOverlay(
                         textAlign = TextAlign.Center
                     )
                 }
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedButton(onClick = onChangeTv) { Text("Change TV") }
-                    OutlinedButton(onClick = onToggleSetup) { Text(if (showSetup) "Hide setup" else "Bluetooth setup") }
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    FitOutlinedButton(label = "Change TV", onClick = onChangeTv, modifier = Modifier.weight(1f))
+                    FitOutlinedButton(
+                        label = if (showSetup) "Hide setup" else "Bluetooth setup",
+                        onClick = onToggleSetup,
+                        modifier = Modifier.weight(1f)
+                    )
                 }
                 AnimatedVisibility(visible = showSetup) { setup() }
             }
@@ -380,21 +381,22 @@ private fun ReconnectingOverlay(
 @Composable
 private fun PowerRow(viewModel: RemoteViewModel) {
     Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-        Button(onClick = { viewModel.onPowerClicked() }, modifier = Modifier.weight(1f).height(56.dp)) { Text("On") }
-        Button(
+        FitButton(label = "On", onClick = { viewModel.onPowerClicked() }, modifier = Modifier.weight(1f).height(56.dp))
+        FitButton(
+            label = "Off",
             onClick = { viewModel.onPowerOffClicked() },
             modifier = Modifier.weight(1f).height(56.dp),
             colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
-        ) { Text("Off") }
+        )
     }
 }
 
 @Composable
 private fun VolumeRow(viewModel: RemoteViewModel) {
     Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-        FilledTonalButton(onClick = { viewModel.onVolumeDown() }, modifier = Modifier.weight(1f).height(56.dp)) { Text("Vol −") }
-        FilledTonalButton(onClick = { viewModel.onMuteClicked() }, modifier = Modifier.weight(1f).height(56.dp)) { Text("Mute") }
-        FilledTonalButton(onClick = { viewModel.onVolumeUp() }, modifier = Modifier.weight(1f).height(56.dp)) { Text("Vol +") }
+        FitTonalButton(label = "Vol −", onClick = { viewModel.onVolumeDown() }, modifier = Modifier.weight(1f).height(56.dp))
+        FitTonalButton(label = "Mute", onClick = { viewModel.onMuteClicked() }, modifier = Modifier.weight(1f).height(56.dp))
+        FitTonalButton(label = "Vol +", onClick = { viewModel.onVolumeUp() }, modifier = Modifier.weight(1f).height(56.dp))
     }
 }
 
@@ -418,9 +420,13 @@ private fun DirectionPad(viewModel: RemoteViewModel) {
         DKey(Ico.Up) { viewModel.onDpadUp() }
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
             DKey(Ico.Left) { viewModel.onDpadLeft() }
-            Button(onClick = { viewModel.onDpadCenter() }, modifier = Modifier.size(88.dp), shape = CircleShape) {
-                Text("OK", style = MaterialTheme.typography.titleLarge)
-            }
+            FitButton(
+                label = "OK",
+                onClick = { viewModel.onDpadCenter() },
+                modifier = Modifier.size(88.dp),
+                shape = CircleShape,
+                textStyle = MaterialTheme.typography.titleLarge
+            )
             DKey(Ico.Right) { viewModel.onDpadRight() }
         }
         DKey(Ico.Down) { viewModel.onDpadDown() }
@@ -490,7 +496,7 @@ private fun KeyboardPanel(
             modifier = Modifier.fillMaxWidth().focusRequester(focus),
             keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
             keyboardActions = KeyboardActions(onSearch = { onSubmit() }),
-            trailingIcon = { TextButton(onClick = onClose) { Text("Close") } }
+            trailingIcon = { FitTextButton(label = "Close", onClick = onClose) }
         )
         if (youTubeMode) SearchStatusLine(searchState, onRetry = onRetrySearch)
     }
@@ -546,7 +552,7 @@ private fun GuidelinesDialog(onDismiss: () -> Unit) {
                 }
             }
         },
-        confirmButton = { TextButton(onClick = onDismiss) { Text("Close") } }
+        confirmButton = { FitTextButton(label = "Close", onClick = onDismiss) }
     )
 }
 
@@ -579,6 +585,6 @@ private fun HowToPairDialog(onDismiss: () -> Unit) {
                 )
             }
         },
-        confirmButton = { TextButton(onClick = onDismiss) { Text("Close") } }
+        confirmButton = { FitTextButton(label = "Close", onClick = onDismiss) }
     )
 }
