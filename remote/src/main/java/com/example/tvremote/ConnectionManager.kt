@@ -271,6 +271,12 @@ class ConnectionManager(
         keyboardNudge.trySend(Unit)
     }
 
+    /** Call after the TV's address or PIN was saved, or the Bluetooth TV was chosen: check both links now instead of waiting out the delay. */
+    fun retryNow() {
+        dashNudge.trySend(Unit)
+        keyboardNudge.trySend(Unit)
+    }
+
     // ---------------------------------------------------------------- buttons
 
     /**
