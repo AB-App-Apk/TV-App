@@ -20,6 +20,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
@@ -58,6 +59,12 @@ class RemoteGraph(context: Context) {
     val bluetooth = BluetoothHidTransport(app)
     val connection = ConnectionManager(app, link, bluetooth)
     val phoneWake = GrennoPhoneWake(tvPower, link) { saved("mac") }
+
+    /** Finds and pairs Bluetooth devices on the setup screen. */
+    val pairing = BluetoothPairing(app)
+
+    /** The gate in front of the remote: open only after a way in has really worked. */
+    val setupGate = SetupGate(prefs)
 }
 
 /** Keeps the [RemoteGraph] alive across screen rotations and closes what it opened when the screen is finished. */
@@ -65,6 +72,7 @@ class RemoteGraphHolder(context: Context) : ViewModel() {
     val graph = RemoteGraph(context)
 
     override fun onCleared() {
+        graph.pairing.close()
         graph.tvPower.cancelWakeOnLan()
         graph.btData.close()
     }
@@ -79,20 +87,32 @@ class RemoteGraphHolder(context: Context) : ViewModel() {
 }
 
 /**
- * The app: the TV setup form, the remote (Layer 3), and the Apps list. The remote itself lives in [RemoteScreen];
- * this only decides which of the three is showing and holds the setup and update logic around it.
+ * The app: the way-in screens (IP address and PIN, or Bluetooth), the remote (Layer 3), and the Apps list.
+ *
+ * THE RULE: the remote opens only when [setupComplete] is true, and only two places ever set it: the TV answered the
+ * IP address and PIN, or the Bluetooth keyboard link came up. Leaving the form blank, a wrong address, a wrong PIN,
+ * or a pairing that did not connect all leave the person where they are.
  */
 @Composable
 fun RemoteApp(graph: RemoteGraph, viewModel: RemoteViewModel) {
     val ctx = LocalContext.current
     val prefs = graph.prefs
     val link = graph.link
+    val gate = graph.setupGate
     val scope = rememberCoroutineScope()
 
     var host by remember { mutableStateOf(prefs.getString("host", "") ?: "") }
     var pin by remember { mutableStateOf(prefs.getString("pin", "") ?: "") }
     var mac by remember { mutableStateOf(prefs.getString("mac", "") ?: "") }
-    var editing by remember { mutableStateOf(host.isBlank()) }
+    var hostError by remember { mutableStateOf(false) }
+    var pinError by remember { mutableStateOf(false) }
+    var macError by remember { mutableStateOf(false) }
+    var checking by remember { mutableStateOf(false) }
+
+    var setupComplete by remember { mutableStateOf(gate.isComplete) }
+    var changingTv by remember { mutableStateOf(false) }
+    var setupPage by remember { mutableStateOf("ip") }
+
     var screen by remember { mutableStateOf("remote") }
     var apps by remember { mutableStateOf(listOf<Pair<String, String>>()) }
     var msg by remember { mutableStateOf("") }
@@ -103,6 +123,10 @@ fun RemoteApp(graph: RemoteGraph, viewModel: RemoteViewModel) {
     val upd = remember { UpdateController(ctx, "TvRemote.apk") }
     DisposableEffect(Unit) { upd.start(); onDispose { upd.stop() } }
     LaunchedEffect(Unit) { upd.check() }
+
+    fun toast(message: String) {
+        Toast.makeText(ctx, message, Toast.LENGTH_LONG).show()
+    }
 
     /** A request to TV Dash that is not a button or typing, for example launching an app. */
     fun send(path: String) {
@@ -129,65 +153,160 @@ fun RemoteApp(graph: RemoteGraph, viewModel: RemoteViewModel) {
         }
     }
 
-    LaunchedEffect(editing) { if (!editing) loadApps() }
-
-    if (screen == "apps" && !editing) {
-        BackHandler { screen = "remote" }
-        AppsPage(apps, msg, onBack = { screen = "remote" }) { pkg -> send("launch?pkg=$pkg"); screen = "remote" }
-    } else if (editing) {
-        Column(
-            Modifier.fillMaxSize().systemBarsPadding().imePadding().verticalScroll(rememberScrollState()).padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp)
-        ) {
-            if (msg.isNotEmpty()) Text(msg, color = MaterialTheme.colorScheme.error)
-            Text("Connect to your TV", style = MaterialTheme.typography.titleLarge)
-            Text("Open TV Dash on the TV. The Phone remote card shows the PIN and the IP address.")
-            OutlinedTextField(
-                value = host, onValueChange = { host = it }, label = { Text("TV IP address") },
-                singleLine = true, modifier = Modifier.fillMaxWidth(),
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
-            )
-            OutlinedTextField(
-                value = pin, onValueChange = { pin = it }, label = { Text("PIN") },
-                singleLine = true, modifier = Modifier.fillMaxWidth(),
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
-            )
-            OutlinedTextField(
-                value = mac, onValueChange = { mac = it },
-                label = { Text("TV MAC address (optional, for Wake-on-LAN)") },
-                supportingText = { Text("TV Settings > Device Preferences > About > Status") },
-                singleLine = true, modifier = Modifier.fillMaxWidth()
-            )
-            FitButton(
-                label = "Connect",
-                onClick = {
-                    if (mac.isNotBlank() && graph.tvPower.parseMac(mac) == null) {
-                        msg = "The MAC address needs 12 hex digits, like AA:BB:CC:DD:EE:FF."
-                    } else {
-                        prefs.edit().putString("host", host.trim()).putString("pin", pin.trim())
-                            .putString("mac", mac.trim()).apply()
-                        msg = ""
-                        editing = false
+    /** The first way in. Opens the remote only if the fields are right AND the TV answers with that address and PIN. */
+    fun connectWithIp() {
+        if (checking) return
+        hostError = false
+        pinError = false
+        macError = false
+        when (val input = ConnectionInput.check(host, pin)) {
+            is InputCheck.Invalid -> {
+                hostError = input.ipWrong
+                pinError = input.pinWrong
+                toast(input.message)
+            }
+            is InputCheck.Valid -> {
+                if (mac.isNotBlank() && graph.tvPower.parseMac(mac) == null) {
+                    macError = true
+                    toast("The MAC address needs 12 hex digits, like AA:BB:CC:DD:EE:FF.")
+                    return
+                }
+                scope.launch {
+                    checking = true
+                    when (ConnectionInput.askTv(input.host, input.pin)) {
+                        TvCheck.ACCEPTED -> {
+                            gate.completeWithIp(input.host, input.pin, mac.trim())
+                            host = input.host
+                            pin = input.pin
+                            msg = ""
+                            graph.connection.retryNow()
+                            setupComplete = true
+                            changingTv = false
+                        }
+                        TvCheck.WRONG_PIN -> {
+                            pinError = true
+                            toast("The TV did not accept that PIN. Check the PIN on the TV's Phone remote card.")
+                        }
+                        TvCheck.UNREACHABLE -> {
+                            hostError = true
+                            toast("Can't reach the TV at that address. Is TV Dash open on the TV, on the same Wi-Fi?")
+                        }
                     }
-                },
-                modifier = Modifier.fillMaxWidth()
-            )
-            UpdateRow(upd, scope)
+                    checking = false
+                }
+            }
         }
-    } else {
-        RemoteScreen(
+    }
+
+    val inSetup = !setupComplete || changingTv
+    LaunchedEffect(inSetup) { if (!inSetup) loadApps() }
+
+    when {
+        inSetup && setupPage == "bluetooth" -> BluetoothSetupScreen(
+            pairing = graph.pairing,
+            bluetooth = graph.bluetooth,
+            connection = graph.connection,
+            onBack = { setupPage = "ip" },
+            onConnected = {
+                // The second way in, and only after the Bluetooth keyboard link to the TV is really up.
+                gate.completeWithBluetooth()
+                setupComplete = true
+                changingTv = false
+                setupPage = "ip"
+                screen = "remote"
+            }
+        )
+        inSetup -> SetupForm(
+            host = host, onHostChange = { host = it; hostError = false },
+            pin = pin, onPinChange = { pin = it; pinError = false },
+            mac = mac, onMacChange = { mac = it; macError = false },
+            hostError = hostError, pinError = pinError, macError = macError,
+            checking = checking,
+            canCancel = setupComplete,
+            onConnect = { connectWithIp() },
+            onSetUpBluetooth = { setupPage = "bluetooth" },
+            onCancel = { changingTv = false },
+            footer = { UpdateRow(upd, scope) }
+        )
+        screen == "apps" -> {
+            BackHandler { screen = "remote" }
+            AppsPage(apps, msg, onBack = { screen = "remote" }) { pkg -> send("launch?pkg=$pkg"); screen = "remote" }
+        }
+        else -> RemoteScreen(
             viewModel = viewModel,
             youTube = yt,
             youTubeMode = ytMode,
             onYouTubeModeChange = { ytMode = it; prefs.edit().putBoolean("yt_mode", it).apply() },
             onOpenAppsList = { screen = "apps"; loadApps() },
-            onChangeTv = { editing = true },
+            onChangeTv = { changingTv = true; setupPage = "ip" },
             notice = msg,
             footer = { openGuidelines ->
                 BluetoothFallbackPanel(graph.bluetooth, onChanged = { graph.connection.retryKeyboard() })
                 UpdateRow(upd, scope, onGuidelines = openGuidelines)
             }
         )
+    }
+}
+
+/**
+ * The way-in form: IP address and PIN with Connect, or Bluetooth. Connect does not open the remote by itself; it only
+ * asks [onConnect], which checks the fields and the TV first.
+ */
+@Composable
+private fun SetupForm(
+    host: String, onHostChange: (String) -> Unit,
+    pin: String, onPinChange: (String) -> Unit,
+    mac: String, onMacChange: (String) -> Unit,
+    hostError: Boolean, pinError: Boolean, macError: Boolean,
+    checking: Boolean,
+    canCancel: Boolean,
+    onConnect: () -> Unit,
+    onSetUpBluetooth: () -> Unit,
+    onCancel: () -> Unit,
+    footer: @Composable ColumnScope.() -> Unit
+) {
+    Column(
+        Modifier.fillMaxSize().systemBarsPadding().imePadding().verticalScroll(rememberScrollState()).padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        Text("Connect to your TV", style = MaterialTheme.typography.titleLarge)
+        Text("Open TV Dash on the TV. The Phone remote card shows the PIN and the IP address.")
+        OutlinedTextField(
+            value = host, onValueChange = onHostChange, label = { Text("TV IP address") },
+            isError = hostError, singleLine = true, modifier = Modifier.fillMaxWidth(),
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
+        )
+        OutlinedTextField(
+            value = pin, onValueChange = onPinChange, label = { Text("PIN") },
+            isError = pinError, singleLine = true, modifier = Modifier.fillMaxWidth(),
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
+        )
+        OutlinedTextField(
+            value = mac, onValueChange = onMacChange,
+            label = { Text("TV MAC address (optional, for Wake-on-LAN)") },
+            supportingText = { Text("TV Settings > Device Preferences > About > Status") },
+            isError = macError, singleLine = true, modifier = Modifier.fillMaxWidth()
+        )
+        FitButton(
+            label = if (checking) "Checking..." else "Connect",
+            onClick = onConnect,
+            enabled = !checking,
+            modifier = Modifier.fillMaxWidth()
+        )
+        Text(
+            "\u2014 or \u2014",
+            modifier = Modifier.fillMaxWidth(),
+            textAlign = TextAlign.Center,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        FitOutlinedButton(
+            label = "Set up Bluetooth",
+            onClick = onSetUpBluetooth,
+            enabled = !checking,
+            modifier = Modifier.fillMaxWidth()
+        )
+        if (canCancel) FitTextButton(label = "Cancel", onClick = onCancel, modifier = Modifier.fillMaxWidth())
+        footer()
     }
 }
 
