@@ -236,6 +236,10 @@ fun RemoteApp(graph: RemoteGraph, viewModel: RemoteViewModel) {
             onCancel = { changingTv = false },
             footer = { UpdateRow(upd, scope) }
         )
+        screen == "diagnostics" -> {
+            BackHandler { screen = "remote" }
+            ConnectionDiagnosticsScreen(graph, onBack = { screen = "remote" })
+        }
         screen == "apps" -> {
             BackHandler { screen = "remote" }
             AppsPage(apps, msg, onBack = { screen = "remote" }) { pkg -> send("launch?pkg=$pkg"); screen = "remote" }
@@ -249,6 +253,11 @@ fun RemoteApp(graph: RemoteGraph, viewModel: RemoteViewModel) {
             onChangeTv = { changingTv = true; setupPage = "ip" },
             notice = msg,
             footer = { openGuidelines ->
+                FitOutlinedButton(
+                    label = "Connection diagnostics",
+                    onClick = { screen = "diagnostics" },
+                    modifier = Modifier.fillMaxWidth()
+                )
                 BluetoothFallbackPanel(graph.bluetooth, onChanged = { graph.connection.retryKeyboard() })
                 UpdateRow(upd, scope, onGuidelines = openGuidelines)
             }
