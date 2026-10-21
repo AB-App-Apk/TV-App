@@ -23,6 +23,8 @@ jobs:
         run: |
           base64 -d keystore.b64 > release.keystore
           echo -n "${{ github.run_number }}" > version.txt
+      - name: Run unit tests
+        run: gradle :app:testDebugUnitTest :remote:testDebugUnitTest --no-daemon
       - name: Build debug APKs
         run: gradle :app:assembleDebug :remote:assembleDebug -PbuildNumber=${{ github.run_number }} --no-daemon
       - name: Rename APKs
