@@ -80,7 +80,8 @@ class PinAttemptLimiterTest {
         val limiter = PinAttemptLimiter(maxTrackedClients = 1, nowMs = { now })
         repeat(5) { limiter.authenticate("first", "bad", "1234") }
 
-        assertEquals(PinAuthResult.RATE_LIMITED, limiter.authenticate("second", "1234", "1234"))
+        assertEquals(PinAuthResult.RATE_LIMITED, limiter.authenticate("second", "bad", "1234"))
+        assertEquals(PinAuthResult.ACCEPTED, limiter.authenticate("second", "1234", "1234"))
         assertEquals(PinAuthResult.RATE_LIMITED, limiter.authenticate("first", "1234", "1234"))
     }
 
