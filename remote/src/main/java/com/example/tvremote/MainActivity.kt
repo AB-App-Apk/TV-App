@@ -41,6 +41,12 @@ class MainActivity : ComponentActivity() {
             }
         }
     }
+
+    override fun onResume() {
+        super.onResume()
+        // The Activity is visible here, satisfying modern Android foreground-service start restrictions.
+        BluetoothConnectionService.startIfConfigured(this)
+    }
 }
 
 /**
@@ -53,7 +59,7 @@ class RemoteGraph(context: Context) {
 
     private fun saved(key: String): String = prefs.getString(key, "")?.trim().orEmpty()
 
-    val btData = BluetoothDataClient(app) { saved("pin") }
+    val btData = BluetoothDataClientProvider.acquireGraphClient(app) { saved("pin") }
     val link = TvLink({ saved("host") }, { saved("pin") }, btData)
     val tvPower = GrennoTvRemoteManager(app)
     val bluetooth = BluetoothHidTransport(app)
@@ -74,7 +80,7 @@ class RemoteGraphHolder(context: Context) : ViewModel() {
     override fun onCleared() {
         graph.pairing.close()
         graph.tvPower.cancelWakeOnLan()
-        graph.btData.close()
+        BluetoothDataClientProvider.releaseGraphClient(graph.btData)
     }
 
     class Factory(private val context: Context) : ViewModelProvider.Factory {
@@ -208,6 +214,8 @@ fun RemoteApp(graph: RemoteGraph, viewModel: RemoteViewModel) {
             connection = graph.connection,
             onBack = { setupPage = "ip" },
             onConnected = {
+                // Start the keep-alive while the app is visible; the service shares graph.btData.
+                BluetoothConnectionService.startIfConfigured(ctx)
                 // The second way in, and only after the Bluetooth keyboard link to the TV is really up.
                 gate.completeWithBluetooth()
                 setupComplete = true
