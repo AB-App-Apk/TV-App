@@ -76,11 +76,17 @@ internal class PinAttemptLimiter(
 
             if (state == null) {
                 if (clients.size >= maxTrackedClients) {
-                    val oldest = clients.entries.iterator()
-                    if (oldest.hasNext()) {
-                        oldest.next()
-                        oldest.remove()
+                    // Never evict an active cooldown to make room for a new client identity.
+                    val iterator = clients.entries.iterator()
+                    var evicted = false
+                    while (iterator.hasNext()) {
+                        if (iterator.next().value.blockedUntilMs <= now) {
+                            iterator.remove()
+                            evicted = true
+                            break
+                        }
                     }
+                    if (!evicted) return PinAuthResult.RATE_LIMITED
                 }
                 state = State(failures = 0, windowStartedAtMs = now, lastActivityAtMs = now)
                 clients[key] = state
