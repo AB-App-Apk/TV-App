@@ -75,4 +75,13 @@ class PinAttemptLimiterTest {
         now += 60_001L
         assertEquals(PinAuthResult.ACCEPTED, limiter.authenticate("client", "1234", "1234"))
     }
+    @Test
+    fun activeCooldownCannotBeEvictedByNewClientIdentities() {
+        val limiter = PinAttemptLimiter(maxTrackedClients = 1, nowMs = { now })
+        repeat(5) { limiter.authenticate("first", "bad", "1234") }
+
+        assertEquals(PinAuthResult.RATE_LIMITED, limiter.authenticate("second", "1234", "1234"))
+        assertEquals(PinAuthResult.RATE_LIMITED, limiter.authenticate("first", "1234", "1234"))
+    }
+
 }
