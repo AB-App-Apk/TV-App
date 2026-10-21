@@ -4,6 +4,10 @@
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.TRANSMIT_IR" />
 
+    <!-- Keep the selected TV Bluetooth connection alive while the user switches apps. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
+
     <!-- Bluetooth fallback. Android 11 and older use the two legacy permissions; 12+ asks for "Nearby devices". -->
     <uses-permission android:name="android.permission.BLUETOOTH" android:maxSdkVersion="30" />
     <uses-permission android:name="android.permission.BLUETOOTH_ADMIN" android:maxSdkVersion="30" />
@@ -21,6 +25,11 @@
         android:label="TV Remote"
         android:usesCleartextTraffic="true"
         android:theme="@android:style/Theme.DeviceDefault.NoActionBar">
+        <service
+            android:name=".BluetoothConnectionService"
+            android:exported="false"
+            android:foregroundServiceType="connectedDevice" />
+
         <activity android:name=".MainActivity" android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
