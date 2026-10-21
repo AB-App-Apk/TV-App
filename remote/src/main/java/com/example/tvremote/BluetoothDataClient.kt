@@ -12,13 +12,20 @@ import android.os.Build
 import android.util.Log
 import androidx.core.content.ContextCompat
 import com.example.tvlink.TvProtocol
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import java.io.IOException
 import java.io.InputStream
 
@@ -39,13 +46,36 @@ class BluetoothDataClient(context: Context, private val pin: () -> String) {
         const val REPLY_TIMEOUT_MS = 6_000L
         const val MAX_LINE = 4096
         const val MAX_BODY = 1 shl 20
+
+        // Keep the RFCOMM socket ready while the normal Wi-Fi route is working.
+        const val WARM_CHECK_MS = 15_000L
+        const val WARM_NOT_READY_MS = 10_000L
+        const val WARM_RETRY_MIN_MS = 1_000L
+        const val WARM_RETRY_MAX_MS = 30_000L
     }
 
     private val appContext = context.applicationContext
     private val adapter: BluetoothAdapter? = appContext.getSystemService(BluetoothManager::class.java)?.adapter
     private val prefs = appContext.getSharedPreferences("remote", Context.MODE_PRIVATE)
+    // Requests and standby connects share this lock so only one RFCOMM connection/request is active at a time.
     private val lock = Mutex()
     @Volatile private var socket: BluetoothSocket? = null
+    @Volatile private var socketTarget: String? = null
+    @Volatile private var connectingSocket: BluetoothSocket? = null
+    @Volatile private var warmConnectingSocket: BluetoothSocket? = null
+    @Volatile private var closed = false
+
+    private val warmScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val warmNudge = Channel<Unit>(Channel.CONFLATED)
+    private val targetListener = android.content.SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
+        if (key == PREF_TARGET) warmNudge.trySend(Unit)
+    }
+
+    init {
+        prefs.registerOnSharedPreferenceChangeListener(targetListener)
+        // The saved target can appear later during Bluetooth setup; the preference listener wakes this loop immediately.
+        warmScope.launch { maintainWarmLink() }
+    }
 
     private fun hasPermission(): Boolean = Build.VERSION.SDK_INT < Build.VERSION_CODES.S ||
         ContextCompat.checkSelfPermission(appContext, Manifest.permission.BLUETOOTH_CONNECT) == PackageManager.PERMISSION_GRANTED
@@ -61,44 +91,122 @@ class BluetoothDataClient(context: Context, private val pin: () -> String) {
      * Sends one request and returns the TV's answer, or null when the Bluetooth road is not set up or the TV did not
      * answer. A stale link is dropped and the request is retried once on a fresh one.
      */
-    suspend fun request(path: String): TvReply? = lock.withLock {
-        if (!isAvailable()) return@withLock null
-        withContext(Dispatchers.IO) {
-            repeat(2) { attempt ->
+    /**
+     * Maintains a connected RFCOMM standby while Bluetooth is configured, even when Wi-Fi currently works.
+     * Failed connects use backoff; selecting a different TV or saving the target wakes the loop immediately.
+     */
+    private suspend fun maintainWarmLink() {
+        var retryMs = WARM_RETRY_MIN_MS
+        while (warmScope.isActive && !closed) {
+            if (!isAvailable()) {
                 try {
-                    val link = connected() ?: return@withContext null
-                    return@withContext exchange(link, path)
-                } catch (e: IOException) {
-                    Log.w(TAG, "Bluetooth request failed (attempt ${attempt + 1}): ${e.message}")
-                    closeLink()
-                } catch (e: SecurityException) {
-                    Log.w(TAG, "Bluetooth permission is missing", e)
-                    closeLink()
-                    return@withContext null
+                    lock.withLock { closeLink() }
+                } catch (e: CancellationException) {
+                    throw e
                 }
+                waitForWarmNudge(WARM_NOT_READY_MS)
+                continue
             }
-            null
+
+            val ready = try {
+                lock.withLock {
+                    if (closed || !isAvailable()) {
+                        closeLink()
+                        false
+                    } else {
+                        try {
+                            connected(warming = true) != null
+                        } catch (e: CancellationException) {
+                            throw e
+                        } catch (e: Exception) {
+                            Log.w(TAG, "RFCOMM standby connect failed: " + e.message)
+                            closeLink()
+                            false
+                        }
+                    }
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Log.w(TAG, "RFCOMM standby failed: " + e.message)
+                false
+            }
+
+            if (ready) {
+                retryMs = WARM_RETRY_MIN_MS
+                // Recheck periodically in case Android reports that a previously open socket has closed.
+                waitForWarmNudge(WARM_CHECK_MS)
+            } else {
+                waitForWarmNudge(retryMs)
+                retryMs = (retryMs * 2).coerceAtMost(WARM_RETRY_MAX_MS)
+            }
         }
     }
 
-    /** Closes the link. Call when the screen is destroyed. */
-    fun close() = closeLink()
-
-    private fun closeLink() {
-        runCatching { socket?.close() }
-        socket = null
+    private suspend fun waitForWarmNudge(timeoutMs: Long) {
+        withTimeoutOrNull(timeoutMs) { warmNudge.receive() }
     }
 
-    /** Reuses the open link, or opens a new one to the chosen paired TV. */
-    private suspend fun connected(): BluetoothSocket? {
-        socket?.let { if (it.isConnected) return it }
+    /**
+     * Sends one request. If a standby connection is still being opened when Wi-Fi fails, the real request takes
+     * priority: it closes that in-flight standby attempt and opens its own connection without waiting for its timeout.
+     */
+    suspend fun request(path: String): TvReply? {
+        if (closed) return null
+        warmConnectingSocket?.let { runCatching { it.close() } }
+        return lock.withLock {
+            if (closed || !isAvailable()) return@withLock null
+            withContext(Dispatchers.IO) {
+                repeat(2) { attempt ->
+                    try {
+                        val link = connected() ?: return@withContext null
+                        return@withContext exchange(link, path)
+                    } catch (e: IOException) {
+                        Log.w(TAG, "Bluetooth request failed (attempt " + (attempt + 1) + "): " + e.message)
+                        closeLink()
+                    } catch (e: SecurityException) {
+                        Log.w(TAG, "Bluetooth permission is missing", e)
+                        closeLink()
+                        return@withContext null
+                    }
+                }
+                null
+            }
+        }
+    }
+
+    /** Closes the background standby worker and its socket. Call when the screen's graph is destroyed. */
+    fun close() {
+        if (closed) return
+        closed = true
+        prefs.unregisterOnSharedPreferenceChangeListener(targetListener)
+        warmScope.cancel()
+        runCatching { warmConnectingSocket?.close() }
+        runCatching { connectingSocket?.close() }
+        warmNudge.close()
         closeLink()
-        val a = adapter ?: return null
+    }
+
+    private fun closeLink() {
+        val old = socket
+        socket = null
+        socketTarget = null
+        runCatching { old?.close() }
+    }
+
+    /** Reuses the open link for the currently selected TV, or opens a new one. */
+    private suspend fun connected(warming: Boolean = false): BluetoothSocket? {
+        if (closed) return null
         val address = prefs.getString(PREF_TARGET, null) ?: return null
+        socket?.let { if (it.isConnected && socketTarget == address) return it }
+        closeLink()
+
+        val a = adapter ?: return null
         val device = a.getRemoteDevice(address)
         if (device.bondState != BluetoothDevice.BOND_BONDED) return null
         a.cancelDiscovery() // scanning slows a connection down
         val s = device.createRfcommSocketToServiceRecord(TvProtocol.BT_UUID)
+        if (warming) warmConnectingSocket = s else connectingSocket = s
         try {
             coroutineScope {
                 // connect() cannot be cancelled, so a watchdog closes the socket if the TV never answers.
@@ -112,12 +220,18 @@ class BluetoothDataClient(context: Context, private val pin: () -> String) {
                     watchdog.cancel()
                 }
             }
-        } catch (e: IOException) {
+            if (closed) throw IOException("Bluetooth data client is closed")
+            if (!s.isConnected) throw IOException("Bluetooth connection did not open")
+            socket = s
+            socketTarget = address
+            return s
+        } catch (e: Exception) {
             runCatching { s.close() }
             throw e
+        } finally {
+            if (warming && warmConnectingSocket === s) warmConnectingSocket = null
+            if (!warming && connectingSocket === s) connectingSocket = null
         }
-        socket = s
-        return s
     }
 
     /** The request text is the same as over Wi-Fi; the answer is read by its Content-Length. */
