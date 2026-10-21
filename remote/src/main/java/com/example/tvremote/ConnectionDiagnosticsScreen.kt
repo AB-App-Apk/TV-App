@@ -19,6 +19,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
@@ -30,6 +31,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
@@ -150,11 +152,19 @@ fun ConnectionDiagnosticsScreen(graph: RemoteGraph, onBack: () -> Unit) {
         }
 
         if (hint.isNotBlank()) {
-            DiagnosticCard(title = "Suggested fix") {
+            DiagnosticCard(
+                title = "Suggested fix",
+                containerColor = Color(0xFFFFB300),
+                contentColor = Color(0xFF1F1300)
+            ) {
                 Text(hint, style = MaterialTheme.typography.bodyMedium)
             }
         } else {
-            DiagnosticCard(title = "Suggested fix") {
+            DiagnosticCard(
+                title = "Suggested fix",
+                containerColor = Color(0xFFFFB300),
+                contentColor = Color(0xFF1F1300)
+            ) {
                 Text(
                     "If the test fails, confirm TV Dash is running, the saved IP/PIN are current, Bluetooth is enabled " +
                         "on both devices, the TV is paired, and Nearby devices permission is granted.",
@@ -173,8 +183,19 @@ fun ConnectionDiagnosticsScreen(graph: RemoteGraph, onBack: () -> Unit) {
 }
 
 @Composable
-private fun DiagnosticCard(title: String, content: @Composable () -> Unit) {
-    Card(Modifier.fillMaxWidth()) {
+private fun DiagnosticCard(
+    title: String,
+    containerColor: Color = MaterialTheme.colorScheme.surface,
+    contentColor: Color = MaterialTheme.colorScheme.onSurface,
+    content: @Composable () -> Unit
+) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(
+            containerColor = containerColor,
+            contentColor = contentColor
+        )
+    ) {
         Column(
             Modifier.fillMaxWidth().padding(14.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp)
