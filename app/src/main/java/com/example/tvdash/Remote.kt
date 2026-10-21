@@ -222,10 +222,15 @@ class RemoteService : Service() {
         }
     }
 
-    /** One request line in, one answer out. Wi-Fi and the Bluetooth data channel both use it, so they behave alike. */
-    private fun answer(line: String): Pair<String, String> {
+    /** Shared by Wi-Fi and Bluetooth, with independent attempt histories for each client. */
+    private val pinLimiter = PinAttemptLimiter()
+
+    /** One request line in, one answer out. Wi-Fi and Bluetooth keep the same protocol and denial response. */
+    private fun answer(line: String, clientKey: String): Pair<String, String> {
         val uri = Uri.parse("http://tv" + (line.split(" ").getOrNull(1) ?: "/"))
-        if (uri.getQueryParameter("pin") != pin(this)) return "403 Forbidden" to ""
+        if (pinLimiter.authenticate(clientKey, uri.getQueryParameter("pin"), pin(this)) != PinAuthResult.ACCEPTED) {
+            return "403 Forbidden" to ""
+        }
         return try {
             "200 OK" to route(uri)
         } catch (e: Exception) {
@@ -254,7 +259,7 @@ class RemoteService : Service() {
             val r = c.getInputStream().bufferedReader()
             val line = readLineCapped(r) ?: return
             skipHeaders(r)
-            val (status, text) = answer(line)
+            val (status, text) = answer(line, "wifi:${c.inetAddress?.hostAddress ?: "unknown"}")
             reply(c.getOutputStream(), status, text, keepOpen = false)
         } catch (e: Exception) {
             // A broken or hostile connection must never take the listener down.
@@ -271,7 +276,7 @@ class RemoteService : Service() {
             while (running) {
                 val line = readLineCapped(r) ?: break // the phone closed the link
                 skipHeaders(r)
-                val (status, text) = answer(line)
+                val (status, text) = answer(line, "bluetooth:${c.remoteDevice.address}")
                 reply(out, status, text, keepOpen = true)
             }
         } catch (e: Exception) {
