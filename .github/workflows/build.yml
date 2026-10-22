@@ -19,14 +19,37 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: 8.9
-      - name: Signing key and build number
+      - name: Prepare signing key and build number
+        env:
+          ANDROID_SIGNING_KEY_BASE64: ${{ secrets.ANDROID_SIGNING_KEY_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: |
-          base64 -d keystore.b64 > release.keystore
-          echo -n "${{ github.run_number }}" > version.txt
+          set -euo pipefail
+          test -n "$ANDROID_SIGNING_KEY_BASE64" || { echo "::error::Missing repository secret ANDROID_SIGNING_KEY_BASE64"; exit 1; }
+          test -n "$ANDROID_KEYSTORE_PASSWORD" || { echo "::error::Missing repository secret ANDROID_KEYSTORE_PASSWORD"; exit 1; }
+          test -n "$ANDROID_KEY_ALIAS" || { echo "::error::Missing repository secret ANDROID_KEY_ALIAS"; exit 1; }
+          test -n "$ANDROID_KEY_PASSWORD" || { echo "::error::Missing repository secret ANDROID_KEY_PASSWORD"; exit 1; }
+          printf '%s' "$ANDROID_SIGNING_KEY_BASE64" | base64 --decode > release.keystore
+          test -s release.keystore
+          chmod 600 release.keystore
+          if ! keytool -list -keystore release.keystore -storepass "$ANDROID_KEYSTORE_PASSWORD" -alias "$ANDROID_KEY_ALIAS" >/dev/null 2>&1; then
+            echo "::error::The signing keystore, store password, or alias is invalid."
+            exit 1
+          fi
+          echo -n "$GITHUB_RUN_NUMBER" > version.txt
       - name: Run unit tests
         run: gradle :app:testDebugUnitTest :remote:testDebugUnitTest --no-daemon
       - name: Build debug APKs
+        env:
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: gradle :app:assembleDebug :remote:assembleDebug -PbuildNumber=${{ github.run_number }} --no-daemon
+      - name: Remove signing key from runner
+        if: always()
+        run: rm -f release.keystore
       - name: Rename APKs
         run: |
           cp app/build/outputs/apk/debug/app-debug.apk TvDash.apk
@@ -38,6 +61,7 @@ jobs:
             TvDash.apk
             TvRemote.apk
       - name: Publish release (stable download link)
+        if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
         uses: softprops/action-gh-release@v2
         with:
           tag_name: latest
