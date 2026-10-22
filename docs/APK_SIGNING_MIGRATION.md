@@ -1,40 +1,39 @@
-# APK signing secret migration
+# APK signing migration
 
 ## Why this is required
 
-The former `keystore.b64` file and the hardcoded Gradle passwords were committed to a public repository. Treat that signing key as compromised. Removing the file from the current branch does not erase it from Git history or make the old key trustworthy.
+The former `keystore.b64` file and hardcoded Gradle passwords were committed to a public repository. Treat the old signing key as compromised. Removing the file from the current branch does not erase it from Git history or make it trustworthy.
 
-This change moves future build inputs to GitHub Actions repository secrets and makes CI fail clearly if required values are missing. It is containment, not the final key-rotation step.
+The replacement key is stored in GitHub Actions repository secrets. This prevents the workflow from reading signing material from source files, but the release transition is not complete until the new-key builds are verified.
 
 ## Required GitHub Actions repository secrets
 
-Before merging this change, open the repository's **Settings → Secrets and variables → Actions** and add these repository secrets:
+The build workflow requires these repository secrets:
 
-- `ANDROID_SIGNING_KEY_BASE64`: base64 encoding of the keystore file (single-line value).
-- `ANDROID_KEYSTORE_PASSWORD`: keystore password.
-- `ANDROID_KEY_ALIAS`: alias inside the keystore.
+- `ANDROID_SIGNING_KEY_BASE64`: single-line Base64 encoding of the **new keystore file**.
+- `ANDROID_KEYSTORE_PASSWORD`: password used to open the new keystore.
+- `ANDROID_KEY_ALIAS`: exact alias of the new key.
 - `ANDROID_KEY_PASSWORD`: password for that alias.
 
-Never put any of these values in source files, issues, pull-request comments, or workflow logs. Do not paste secret values into chat.
+The old `keystore.b64` must not be copied into the new secret. Never put signing values in source files, issues, pull-request comments, or workflow logs. Do not paste secret values into chat.
 
-**Do not merge until the secret values have been configured and the signing transition has been tested.** The updater installs APKs over existing installs, so a mismatched signing certificate can make updates fail.
+## Compatibility decision: clean reinstall required
 
-## Key rotation and compatibility gate
+The new key is unrelated to the publicly exposed key, and no proof-of-rotation lineage is configured. Android will reject a new-key APK as an in-place update of an installed old-key APK.
 
-The exposed key must not be treated as safe just because it is now stored as a secret. A replacement signing key and Android proof-of-rotation lineage must be planned and verified. Do not simply generate a new keystore and publish APKs signed only by that key.
+For this migration, plan a controlled clean reinstall rather than an in-place rotation:
 
-Before publishing rotated APKs:
+1. Build both APKs from the draft branch and confirm that the Actions workflow passes.
+2. Keep the existing applications installed while the APKs are being built and checked. Do not publish the draft-branch artifacts as the live `latest` release.
+3. Save any settings or information that must be restored. Uninstalling an app normally removes its local app data and permissions.
+4. When the new-key APKs are ready, uninstall the old TvDash from the TV and old TvRemote from the phone, then install the matching new APKs.
+5. Reconfigure permissions and settings, test remote connectivity, and verify that a later release signed with the same new key updates in place.
+6. The project still declares `minSdk = 26`; test the installation flow on the actual supported devices before considering the migration complete.
 
-1. Identify the certificate fingerprint of the currently installed/published TvDash and TvRemote APKs.
-2. Prepare the new signing key and a valid signing lineage using Android's `apksigner` tooling.
-3. Verify signatures and lineage for both packages.
-4. Install each rotated APK over the currently installed app on the target Android 14 phone and TV without uninstalling first.
-5. Confirm the app data remains, the app launches, and the in-app updater successfully installs a later build.
-6. Decide and document behavior for API 26–27 devices. The project currently declares `minSdk = 26`; rotation defaults and legacy-device behavior must not be assumed.
-7. Only after these checks pass, publish the rotated key and retire the old signing material from active build configuration.
-
-Git history cleanup alone does not revoke a previously exposed private key. Consider repository-history cleanup after the operational transition, but do not treat it as a substitute for key rotation.
+Do not uninstall the existing apps until both new-key APKs have been built and the installation plan is ready.
 
 ## Workflow behavior
 
-The workflow expects the four secrets above, validates the keystore and alias, exposes passwords only as step environment variables, and removes the generated `release.keystore` from the runner after the build step. The same signing identity is used by both applications to preserve current update compatibility during the transition.
+The workflow validates that the new keystore, keystore password and alias are usable, passes passwords to Gradle through environment variables, and removes the generated `release.keystore` from the runner after tests/building. Both applications use the same new key so future releases can update each app in place.
+
+This protects future workflow inputs, but it does not erase the old signing material from public Git history. History cleanup may be considered separately; it is not a substitute for replacing the key.
