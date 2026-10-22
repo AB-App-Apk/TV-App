@@ -19,12 +19,18 @@ android {
     sourceSets.getByName("main").java.srcDir("../shared")
     val ks = rootProject.file("release.keystore")
     if (ks.exists()) {
+        val storePassword = providers.environmentVariable("ANDROID_KEYSTORE_PASSWORD").orNull
+            ?: throw GradleException("ANDROID_KEYSTORE_PASSWORD must be set when release.keystore is present")
+        val keyAlias = providers.environmentVariable("ANDROID_KEY_ALIAS").orNull
+            ?: throw GradleException("ANDROID_KEY_ALIAS must be set when release.keystore is present")
+        val keyPassword = providers.environmentVariable("ANDROID_KEY_PASSWORD").orNull
+            ?: throw GradleException("ANDROID_KEY_PASSWORD must be set when release.keystore is present")
         signingConfigs {
             create("shared") {
                 storeFile = ks
-                storePassword = "tvdash123"
-                keyAlias = "tvdash"
-                keyPassword = "tvdash123"
+                this.storePassword = storePassword
+                this.keyAlias = keyAlias
+                this.keyPassword = keyPassword
             }
         }
         buildTypes { getByName("debug") { signingConfig = signingConfigs.getByName("shared") } }
