@@ -262,7 +262,7 @@ class BluetoothDataClient(context: Context, private val pin: () -> String) {
         try {
             val out = s.outputStream
             val input = s.inputStream
-            out.write("GET /$path HTTP/1.1\\r\\n${TvProtocol.PIN_HEADER}: ${pin()}\\r\\n\\r\\n".toByteArray())
+            out.write("GET /$path HTTP/1.1\r\n${TvProtocol.PIN_HEADER}: ${pin()}\r\n\r\n".toByteArray())
             out.flush()
 
             val status = readLine(input) ?: throw IOException("The TV closed the Bluetooth link")
