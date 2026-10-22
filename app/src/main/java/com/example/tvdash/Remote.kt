@@ -70,7 +70,7 @@ class BootReceiver : BroadcastReceiver() {
 }
 
 /**
- * Tiny HTTP server the phone talks to (/apps /launch /vol /power /key /text /yt), every request guarded by ?pin=.
+ * Tiny HTTP server for the phone remote. Every request is authenticated with the X-TV-PIN header.
  *
  * Runs as a foreground service, so Android keeps its process at high priority and restarts it after a kill
  * (START_STICKY). The listener never gives up: if its socket breaks it is reopened, and a health check every
@@ -226,9 +226,9 @@ class RemoteService : Service() {
     private val pinLimiter = PinAttemptLimiter()
 
     /** One request line in, one answer out. Wi-Fi and Bluetooth keep the same protocol and denial response. */
-    private fun answer(line: String, clientKey: String): Pair<String, String> {
+    private fun answer(line: String, clientKey: String, suppliedPin: String?): Pair<String, String> {
         val uri = Uri.parse("http://tv" + (line.split(" ").getOrNull(1) ?: "/"))
-        if (pinLimiter.authenticate(clientKey, uri.getQueryParameter("pin"), pin(this)) != PinAuthResult.ACCEPTED) {
+        if (pinLimiter.authenticate(clientKey, suppliedPin, pin(this)) != PinAuthResult.ACCEPTED) {
             return "403 Forbidden" to ""
         }
         return try {
@@ -247,9 +247,19 @@ class RemoteService : Service() {
         out.flush()
     }
 
-    private fun skipHeaders(r: BufferedReader) {
+    /** Reads bounded headers and extracts authentication without putting the PIN in the URL. */
+    private fun readPinHeader(r: BufferedReader): String? {
+        var suppliedPin: String? = null
         var headers = 0
-        while (headers++ < 64 && !readLineCapped(r).isNullOrEmpty()) { /* skip the request headers */ }
+        while (headers++ < 64) {
+            val header = readLineCapped(r) ?: break
+            if (header.isEmpty()) break
+            val colon = header.indexOf(':')
+            if (colon > 0 && header.substring(0, colon).equals(TvProtocol.PIN_HEADER, ignoreCase = true)) {
+                suppliedPin = header.substring(colon + 1).trim()
+            }
+        }
+        return suppliedPin
     }
 
     /** Wi-Fi: one request per connection. */
@@ -258,8 +268,8 @@ class RemoteService : Service() {
             c.soTimeout = 3000
             val r = c.getInputStream().bufferedReader()
             val line = readLineCapped(r) ?: return
-            skipHeaders(r)
-            val (status, text) = answer(line, "wifi:${c.inetAddress?.hostAddress ?: "unknown"}")
+            val suppliedPin = readPinHeader(r)
+            val (status, text) = answer(line, "wifi:${c.inetAddress?.hostAddress ?: "unknown"}", suppliedPin)
             reply(c.getOutputStream(), status, text, keepOpen = false)
         } catch (e: Exception) {
             // A broken or hostile connection must never take the listener down.
@@ -275,8 +285,8 @@ class RemoteService : Service() {
             val out = c.outputStream
             while (running) {
                 val line = readLineCapped(r) ?: break // the phone closed the link
-                skipHeaders(r)
-                val (status, text) = answer(line, "bluetooth:${c.remoteDevice.address}")
+                val suppliedPin = readPinHeader(r)
+                val (status, text) = answer(line, "bluetooth:${c.remoteDevice.address}", suppliedPin)
                 reply(out, status, text, keepOpen = true)
             }
         } catch (e: Exception) {

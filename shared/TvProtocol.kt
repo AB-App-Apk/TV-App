@@ -4,6 +4,9 @@ import java.util.UUID
 
 /** Values TvDash and TvRemote must agree on. This file is compiled into both apps from the shared/ folder. */
 object TvProtocol {
+    /** Header carrying the PIN; never put authentication material in the request URL. */
+    const val PIN_HEADER = "X-TV-PIN"
+
     /** The name TvDash gives its Bluetooth service. */
     const val BT_SERVICE_NAME = "TvDash remote link"
 

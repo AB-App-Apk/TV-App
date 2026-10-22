@@ -35,23 +35,23 @@ This is a manual acceptance checklist, not an automated emulator test. The four 
 **PASS:** Bluetooth control continues while phone Wi-Fi is off, and normal control returns after Wi-Fi is restored without restarting the app or re-pairing. Record separately if HID keys work but TV Dash-only actions such as the app list do not.  
 **FAIL:** All control is lost, or reconnecting Wi-Fi requires manually restarting TvRemote/TV Dash.
 
-### 3. TV PIN throttling
+### 3. TV PIN throttling and header-based authentication
 
-Run this test after the connectivity checks. Use a browser on the **same phone and Wi-Fi network** so the test requests originate from the same client IP as TvRemote. Keep the correct PIN private; do not post it in screenshots or logs.
+Run this test after the connectivity checks. Use TvRemote on the **same phone and Wi-Fi network** so requests originate from the same client IP. The PIN must be sent in the `X-TV-PIN` HTTP header, not in the URL. Do not put the correct PIN in a browser address bar, screenshots, or logs.
 
 1. Find the TV's current IP address on the TV Dash dashboard and its correct PIN on the Phone remote card.
-2. Choose a different four-digit PIN that is definitely incorrect.
-3. In the phone browser, open the following URL, substituting the TV IP and chosen wrong PIN:
-   `http://TV_IP:8765/apps?pin=WRONG_PIN&check=1`
-4. Repeat five times, changing `check=1` to `check=2`, `check=3`, `check=4`, and `check=5` to avoid browser caching.
-5. Immediately request `http://TV_IP:8765/apps?pin=CORRECT_PIN&check=6`, substituting the real PIN locally. The request should still be denied during the cooldown.
-6. Wait at least 65 seconds after the fifth incorrect attempt and retry with a new `check` value. Do not share any URL containing the correct PIN.
+2. In TvRemote's **Connect to your TV** setup screen, enter the TV IP and a definitely incorrect four-digit PIN.
+3. Tap **Connect** and confirm TvRemote reports that the PIN was rejected.
+4. Repeat the incorrect-PIN attempt until five failed requests have been made from the same phone/IP.
+5. Immediately enter the correct PIN and tap **Connect** again. The request should still be denied during the cooldown.
+6. Wait at least 65 seconds after the fifth incorrect attempt, then retry with the correct PIN.
 
-**PASS:** Incorrect attempts are denied; the correct PIN is also denied during the one-minute cooldown; the correct PIN succeeds after cooldown expires. The same client's active cooldown remains in effect.  
+**PASS:** Incorrect attempts are denied; the correct PIN is also denied during the one-minute cooldown; the correct PIN succeeds after cooldown expires. The same client's active cooldown remains in effect.
+
 **FAIL:** Wrong PIN requests succeed, the correct PIN bypasses the active cooldown, or access remains blocked after the initial cooldown has elapsed.
 
-**Important:** This check intentionally blocks further requests from the phone's IP for about one minute. Do not start a different connectivity check during the cooldown. The first cooldown is 60 seconds; repeated lockouts use longer cooldowns.
-
+**Important:** This check intentionally blocks further requests from the phone's IP for about one minute. Do not start a different connectivity check during the cooldown. The first cooldown is 60 seconds; repeated lockouts use longer cooldowns. Requests that put the PIN in the URL are no longer supported.
+ 
 ### 4. TV restart and reconnection
 
 1. Wait for any PIN cooldown from check 3 to expire.
