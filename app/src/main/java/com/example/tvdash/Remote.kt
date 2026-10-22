@@ -70,7 +70,7 @@ class BootReceiver : BroadcastReceiver() {
 }
 
 /**
- * Tiny HTTP server the phone talks to (/apps /launch /vol /power /key /text /yt), every request guarded by ?pin=.
+ * Tiny HTTP server for the phone remote. Every request is authenticated with the X-TV-PIN header.
  *
  * Runs as a foreground service, so Android keeps its process at high priority and restarts it after a kill
  * (START_STICKY). The listener never gives up: if its socket breaks it is reopened, and a health check every
