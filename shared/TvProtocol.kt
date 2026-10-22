@@ -15,7 +15,7 @@ object TvProtocol {
 
     /** Builds the Bluetooth HTTP request with the PIN only in its header. */
     fun buildBluetoothRequest(path: String, pin: String): String =
-        "GET /${path.trimStart('/')} HTTP/1.1\\r\\n$PIN_HEADER: $pin\\r\\n\\r\\n"
+        "GET /" + path.trimStart('/') + " HTTP/1.1\r\n" + PIN_HEADER + ": " + pin + "\r\n\r\n"
 
     /**
      * Reads a bounded set of HTTP header lines. The supplied reader should return one header at a time,
