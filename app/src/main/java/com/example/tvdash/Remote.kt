@@ -247,28 +247,13 @@ class RemoteService : Service() {
         out.flush()
     }
 
-    /** Reads bounded headers and extracts authentication without putting the PIN in the URL. */
-    private fun readPinHeader(r: BufferedReader): String? {
-        var suppliedPin: String? = null
-        var headers = 0
-        while (headers++ < 64) {
-            val header = readLineCapped(r) ?: break
-            if (header.isEmpty()) break
-            val colon = header.indexOf(':')
-            if (colon > 0 && header.substring(0, colon).equals(TvProtocol.PIN_HEADER, ignoreCase = true)) {
-                suppliedPin = header.substring(colon + 1).trim()
-            }
-        }
-        return suppliedPin
-    }
-
     /** Wi-Fi: one request per connection. */
     private fun handle(c: Socket) {
         try {
             c.soTimeout = 3000
             val r = c.getInputStream().bufferedReader()
             val line = readLineCapped(r) ?: return
-            val suppliedPin = readPinHeader(r)
+            val suppliedPin = TvProtocol.readPinHeader { readLineCapped(r) }
             val (status, text) = answer(line, "wifi:${c.inetAddress?.hostAddress ?: "unknown"}", suppliedPin)
             reply(c.getOutputStream(), status, text, keepOpen = false)
         } catch (e: Exception) {
@@ -285,7 +270,7 @@ class RemoteService : Service() {
             val out = c.outputStream
             while (running) {
                 val line = readLineCapped(r) ?: break // the phone closed the link
-                val suppliedPin = readPinHeader(r)
+                val suppliedPin = TvProtocol.readPinHeader { readLineCapped(r) }
                 val (status, text) = answer(line, "bluetooth:${c.remoteDevice.address}", suppliedPin)
                 reply(out, status, text, keepOpen = true)
             }

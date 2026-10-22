@@ -81,7 +81,7 @@ class TvLink(
         val address = host()
         if (address.isBlank()) return@withContext TvReply.Unreachable
         try {
-            val c = URL("http://$address:$TV_PORT/$path").openConnection() as HttpURLConnection
+            val c = URL(TvProtocol.buildWifiUrl(address, TV_PORT, path)).openConnection() as HttpURLConnection
             try {
                 c.requestMethod = "GET"
                 c.setRequestProperty(TvProtocol.PIN_HEADER, pin())
