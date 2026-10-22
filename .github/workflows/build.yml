@@ -40,6 +40,10 @@ jobs:
           fi
           echo -n "$GITHUB_RUN_NUMBER" > version.txt
       - name: Run unit tests
+        env:
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: gradle :app:testDebugUnitTest :remote:testDebugUnitTest --no-daemon
       - name: Build debug APKs
         env:
