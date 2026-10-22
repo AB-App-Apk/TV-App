@@ -1,6 +1,7 @@
 package com.example.tvremote
 
 import android.os.SystemClock
+import com.example.tvlink.TvProtocol
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -79,10 +80,11 @@ class TvLink(
     private suspend fun overWifi(path: String): TvReply = withContext(Dispatchers.IO) {
         val address = host()
         if (address.isBlank()) return@withContext TvReply.Unreachable
-        val sep = if ('?' in path) '&' else '?'
         try {
-            val c = URL("http://$address:$TV_PORT/$path${sep}pin=${pin()}").openConnection() as HttpURLConnection
+            val c = URL("http://$address:$TV_PORT/$path").openConnection() as HttpURLConnection
             try {
+                c.requestMethod = "GET"
+                c.setRequestProperty(TvProtocol.PIN_HEADER, pin())
                 c.connectTimeout = 2_000
                 c.readTimeout = 4_000
                 if (c.responseCode == HttpURLConnection.HTTP_OK) {
