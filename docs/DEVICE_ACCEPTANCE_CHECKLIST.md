@@ -2,7 +2,7 @@
 
 **Scope:** Task 3 of the TvRemote/TvDash roadmap. Run against the actual phone and Grennö GR-R40SMART TV after the unit-test/CI gate passes.
 
-This is a manual acceptance checklist, not an automated emulator test. Record the result on the same hardware and network setup used for normal remote operation. Do not proceed to the diagnostics feature until these checks have been recorded.
+This is a manual acceptance checklist, not an automated emulator test. The four core checks below have been reported as passing on the actual phone and Grennö TV. The connection-diagnostics screen has also been reported as working as intended; the latest suggested-fix color change still needs confirmation on the newly built APK.
 
 ## Test setup
 
@@ -64,20 +64,31 @@ Run this test after the connectivity checks. Use a browser on the **same phone a
 
 ## Result record
 
-Fill this in after running the checks on the physical devices.
+**Reported outcome: 4/4 core real-device checks passed.** Results below reflect the user's physical-device test report.
 
 | Check | Result (PASS / FAIL / NOT RUN) | Notes |
 |---|---|---|
-| 1. Backgrounding | NOT RUN | |
-| 2. Wi-Fi loss and recovery | NOT RUN | |
-| 3. PIN throttling | NOT RUN | |
-| 4. TV restart | NOT RUN | |
+| 1. Backgrounding | PASS | Reported passed on the phone. |
+| 2. Wi-Fi loss and recovery | PASS | Reported Bluetooth fallback and Wi-Fi recovery passed. |
+| 3. PIN throttling | PASS | Reported incorrect-PIN cooldown behavior passed. |
+| 4. TV restart | PASS | Reported reconnect after TV restart passed. |
 
-- Test date:
-- Phone model / Android version:
-- TvRemote build:
-- TV build / Android version:
-- Wi-Fi router or network notes:
+- Result reported: 2026-10-21
+- Phone model / Android version: Not recorded
+- TvRemote build: Not recorded
+- TV: Grennö GR-R40SMART, Android TV 14
+- Wi-Fi router or network notes: Not recorded
+
+## 5. Connection diagnostics screen (Task 4)
+
+1. Open TvRemote and scroll to **Connection diagnostics**.
+2. Confirm phone Wi-Fi, Bluetooth radio, Nearby devices permission, selected TV/configuration, Bluetooth HID state, and combined remote state are displayed.
+3. Tap **Run connection test** and verify a safe ping reports success/failure, response time, route, and time of the last successful response.
+4. Tap **Retry links** and confirm it requests the existing data and keyboard links to reconnect.
+5. Check the **Suggested fix** banner colors after installing a build containing the latest styling change.
+
+**PASS (screen functionality):** The user reported that the diagnostics screen works as intended.  
+**PENDING (latest styling):** Confirm on the newly built APK that the Suggested fix background is `Color(0xFFFFB300)` and its text is `Color(0xFF1F1300)`.
 
 ## Failure report
 
