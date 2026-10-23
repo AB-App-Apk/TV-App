@@ -36,6 +36,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.example.tvlink.TvTls
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
@@ -69,6 +70,8 @@ fun ConnectionDiagnosticsScreen(graph: RemoteGraph, onBack: () -> Unit) {
 
     val hostConfigured = remember { !graph.prefs.getString("host", "").isNullOrBlank() }
     val bluetoothTargetConfigured = remember { !graph.prefs.getString("bt_target", "").isNullOrBlank() }
+    // Only the short code is shown, never the PIN. It is the same code the TV's dashboard shows.
+    val certificateCode = remember { graph.prefs.getString("tls_fp", "").orEmpty().let { if (it.isBlank()) null else TvTls.shortCode(it) } }
 
     var testing by remember { mutableStateOf(false) }
     var testResult by remember { mutableStateOf("Not tested yet") }
@@ -95,6 +98,14 @@ fun ConnectionDiagnosticsScreen(graph: RemoteGraph, onBack: () -> Unit) {
 
         DiagnosticCard(title = "TV links") {
             DiagnosticRow("TV address saved", if (hostConfigured) "Yes" else "No — configure the TV IP")
+            DiagnosticRow(
+                "TV certificate verified (Wi-Fi encryption)",
+                when {
+                    !hostConfigured -> "Not needed — no TV address saved"
+                    certificateCode != null -> "Yes — security code $certificateCode"
+                    else -> "No — tap Change TV, then Connect, and compare the security code"
+                }
+            )
             DiagnosticRow("Bluetooth TV selected", if (bluetoothTargetConfigured) "Yes" else "No — pair/select the TV")
             DiagnosticRow("Bluetooth keyboard (HID)", hidStatusLabel(hidState))
             DiagnosticRow("Combined remote state", overallStatusLabel(overallState))
@@ -125,7 +136,14 @@ fun ConnectionDiagnosticsScreen(graph: RemoteGraph, onBack: () -> Unit) {
                                         testResult = "TV replied, but rejected the request (HTTP ${reply.http}). Check the saved PIN."
                                     }
                                     TvReply.Unreachable -> {
-                                        testResult = "No reply. Check TV power, saved IP/PIN, Wi-Fi and Bluetooth pairing."
+                                        testResult = when {
+                                            graph.link.certificateMismatch ->
+                                                "No reply: the TV's certificate is not the one you verified. If TV Dash was reinstalled, " +
+                                                    "tap Change TV, then Connect, and compare the security code."
+                                            graph.link.needsVerification ->
+                                                "Wi-Fi is off until the TV's security code is verified. Tap Change TV, then Connect."
+                                            else -> "No reply. Check TV power, saved IP/PIN, Wi-Fi and Bluetooth pairing."
+                                        }
                                     }
                                 }
                             } catch (e: Exception) {
@@ -264,6 +282,6 @@ private fun overallStatusLabel(state: RemoteConnectionState): String = when (sta
 }
 
 private fun carrierLabel(carrier: Carrier): String = when (carrier) {
-    Carrier.WIFI -> "Wi-Fi / HTTP"
+    Carrier.WIFI -> "Wi-Fi / HTTPS (TLS, pinned certificate)"
     Carrier.BLUETOOTH -> "Bluetooth data channel (RFCOMM)"
 }
