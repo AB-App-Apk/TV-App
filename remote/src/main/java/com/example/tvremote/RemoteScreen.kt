@@ -495,17 +495,27 @@ private fun KeyboardPanel(
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Switch(checked = youTubeMode, onCheckedChange = onYouTubeModeChange)
-            Text("@YouTube", Modifier.padding(start = 8.dp))
+            Text("YouTube search", Modifier.padding(start = 8.dp))
         }
         OutlinedTextField(
             value = text,
             onValueChange = onTextChange,
             singleLine = true,
-            label = { Text(if (youTubeMode) "[Search on YouTube]" else "[Type on TV]") },
+            label = { Text(if (youTubeMode) "Search on YouTube" else "Typing on TV") },
             modifier = Modifier.fillMaxWidth().focusRequester(focus),
             keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
             keyboardActions = KeyboardActions(onSearch = { onSubmit() }),
-            trailingIcon = { FitTextButton(label = "Close", onClick = onClose) }
+            trailingIcon = {
+                OutlinedButton(
+                    onClick = onClose,
+                    colors = ButtonDefaults.outlinedButtonColors(
+                        containerColor = AmberBanner,
+                        contentColor = OnAmberBanner
+                    )
+                ) {
+                    Text("Close")
+                }
+            }
         )
         if (youTubeMode) SearchStatusLine(searchState, onRetry = onRetrySearch)
     }
