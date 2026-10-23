@@ -1,7 +1,10 @@
 package com.example.tvremote
 
 import android.content.SharedPreferences
+import com.example.tvlink.TvTls
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.withContext
 
 /** The result of checking what was typed on the setup form, before the TV is asked anything. */
 sealed interface InputCheck {
@@ -13,15 +16,17 @@ sealed interface InputCheck {
 }
 
 /** What the TV said, over Wi-Fi only, when asked whether this address and PIN are right. */
-enum class TvCheck { ACCEPTED, WRONG_PIN, UNREACHABLE }
+enum class TvCheck { ACCEPTED, WRONG_PIN, UNREACHABLE, CERTIFICATE }
 
 /**
  * Checks the IP address and PIN from the setup form.
  *
- * Two steps, and the remote is never opened by either one alone:
+ * Three steps, and the remote is never opened by any one of them alone:
  *  1. [check]: both fields are filled in, the address is a real IPv4 address, the PIN is numbers.
- *  2. [askTv]: the TV itself answers a request made with that address and PIN. TV Dash checks the PIN on every
- *     request, so an answer proves both the address and the PIN.
+ *  2. [readFingerprint]: the TV shows its certificate. The person compares the security code on both screens. Nothing
+ *     secret is sent yet, so a device pretending to be the TV never receives the PIN.
+ *  3. [askTv]: the TV itself answers a request made with that address, PIN and verified certificate. TV Dash checks
+ *     the PIN on every request, so an answer proves the address, the PIN and the certificate.
  */
 object ConnectionInput {
 
@@ -44,17 +49,27 @@ object ConnectionInput {
     }
 
     /**
-     * Asks TV Dash on [host] whether [pin] is right. This uses its own Wi-Fi-only link built from exactly what was
-     * typed, so nothing is saved and the Bluetooth road cannot make a wrong address look right. One more try after a
-     * short pause, so a single lost packet does not reject a good address.
+     * Reads the SHA-256 fingerprint of the certificate the TV at [host] presents, or null if it does not answer
+     * with TLS (it is off, on another network, or TV Dash is an older build without encryption). Sends nothing.
      */
-    suspend fun askTv(host: String, pin: String): TvCheck {
-        val link = TvLink({ host }, { pin })
+    suspend fun readFingerprint(host: String): String? =
+        withContext(Dispatchers.IO) { TvTls.fetchFingerprint(host, TV_PORT) }
+
+    /**
+     * Asks TV Dash on [host] whether [pin] is right, trusting only the certificate with [fingerprint]. This uses its own
+     * Wi-Fi-only link built from exactly what was typed, so nothing is saved and the Bluetooth road cannot make a wrong
+     * address look right. One more try after a short pause, so a single lost packet does not reject a good address.
+     */
+    suspend fun askTv(host: String, pin: String, fingerprint: String): TvCheck {
+        val link = TvLink({ host }, { pin }, null, { fingerprint })
         for (attempt in 1..2) {
             when (val reply = link.get("ping")) {
                 is TvReply.Ok -> return TvCheck.ACCEPTED
                 is TvReply.Rejected -> return if (reply.http == 403) TvCheck.WRONG_PIN else TvCheck.UNREACHABLE
-                TvReply.Unreachable -> if (attempt == 1) delay(500)
+                TvReply.Unreachable -> {
+                    if (link.certificateMismatch) return TvCheck.CERTIFICATE
+                    if (attempt == 1) delay(500)
+                }
             }
         }
         return TvCheck.UNREACHABLE
@@ -77,6 +92,7 @@ class SetupGate(private val prefs: SharedPreferences) {
     private companion object {
         const val DONE = "setup_done"
         const val METHOD = "setup_method"
+        const val FINGERPRINT = "tls_fp"
     }
 
     val isComplete: Boolean
@@ -88,6 +104,16 @@ class SetupGate(private val prefs: SharedPreferences) {
 
     /** The way in that was completed: "ip", "bluetooth", or null before any. */
     val method: String? get() = prefs.getString(METHOD, null)
+
+    /**
+     * The SHA-256 fingerprint of the TV's certificate, saved after the person compared the security code. Empty on a
+     * phone set up before Wi-Fi was encrypted: it must verify the TV once before Wi-Fi works again.
+     */
+    val fingerprint: String get() = prefs.getString(FINGERPRINT, "")?.trim().orEmpty()
+
+    fun pinFingerprint(fingerprint: String) {
+        prefs.edit().putString(FINGERPRINT, TvTls.normalize(fingerprint)).apply()
+    }
 
     fun completeWithIp(host: String, pin: String, mac: String) {
         prefs.edit()
