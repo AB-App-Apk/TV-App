@@ -31,6 +31,7 @@ import android.view.KeyEvent
 import android.view.inputmethod.InputMethodManager
 import androidx.core.content.ContextCompat
 import com.example.tvlink.TvProtocol
+import com.example.tvlink.TvTls
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.BufferedReader
@@ -47,6 +48,8 @@ import java.util.concurrent.Executors
 import java.util.concurrent.RejectedExecutionException
 import java.util.concurrent.ThreadPoolExecutor
 import java.util.concurrent.TimeUnit
+import javax.net.ssl.SSLServerSocket
+import javax.net.ssl.SSLSocket
 import kotlin.concurrent.thread
 
 const val PORT = 8765
@@ -70,7 +73,9 @@ class BootReceiver : BroadcastReceiver() {
 }
 
 /**
- * Tiny HTTP server for the phone remote. Every request is authenticated with the X-TV-PIN header.
+ * Tiny HTTPS server for the phone remote. The Wi-Fi link is encrypted with TLS using TV Dash's own self-signed
+ * certificate (see [TvTlsStore]); a client that does not speak TLS gets no answer. Every request is authenticated with
+ * the X-TV-PIN header, which now travels inside the encrypted link.
  *
  * Runs as a foreground service, so Android keeps its process at high priority and restarts it after a kill
  * (START_STICKY). The listener never gives up: if its socket breaks it is reopened, and a health check every
@@ -146,16 +151,22 @@ class RemoteService : Service() {
         super.onDestroy()
     }
 
-    /** Accept loop that never gives up: if the socket breaks it is reopened after a short, growing wait. */
+    /**
+     * Accept loop that never gives up: if the socket breaks it is reopened after a short, growing wait. The listener is
+     * a TLS server socket, and the certificate is made here the first time (a fraction of a second) before it binds.
+     */
     private fun serveForever() {
         var wait = 500L
         while (running) {
             try {
-                ServerSocket().use { s ->
+                val tls = TvTlsStore.serverContext(this)
+                (tls.serverSocketFactory.createServerSocket() as SSLServerSocket).use { s ->
                     s.reuseAddress = true
+                    s.enabledProtocols = TvTls.enabledProtocols(s.supportedProtocols)
                     s.bind(InetSocketAddress(PORT))
                     server = s
                     wait = 500L
+                    Log.i(TAG, "HTTPS listener is up on port $PORT")
                     while (running) {
                         val c = s.accept()
                         try {
@@ -177,6 +188,7 @@ class RemoteService : Service() {
     /** Confirms the port answers on this device and reopens it if not; also repairs a dropped accessibility service. */
     private fun checkHealth() {
         val alive = try {
+            // Only the TCP connect is checked, so no TLS handshake is needed here.
             Socket().use { it.connect(InetSocketAddress("127.0.0.1", PORT), 800); true }
         } catch (e: IOException) {
             false
@@ -247,10 +259,14 @@ class RemoteService : Service() {
         out.flush()
     }
 
-    /** Wi-Fi: one request per connection. */
+    /**
+     * Wi-Fi: one request per connection. The TLS handshake comes first. A client that is not speaking TLS, or does not
+     * finish the handshake within the read timeout, is dropped before any PIN is looked at, so it cannot use up PIN attempts.
+     */
     private fun handle(c: Socket) {
         try {
             c.soTimeout = 3000
+            (c as? SSLSocket)?.startHandshake()
             val r = c.getInputStream().bufferedReader()
             val line = readLineCapped(r) ?: return
             val suppliedPin = TvProtocol.readPinHeader { readLineCapped(r) }
