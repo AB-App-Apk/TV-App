@@ -25,7 +25,7 @@ jobs:
           gradle-version: 8.9
       # PR validation uses no signing secrets or release keystore.
       - name: Run unit tests and debug compile smoke-check
-        run: gradle :app:testDebugUnitTest :remote:testDebugUnitTest :app:assembleDebug :remote:assembleDebug --no-daemon
+        run: gradle :app:testDebugUnitTest :remote:testDebugUnitTest :app:assembleDebug :remote:assembleDebug :app:assembleRelease :remote:assembleRelease --no-daemon
 
   build:
     if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
