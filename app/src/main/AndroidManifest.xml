@@ -27,7 +27,9 @@
             <category android:name="android.intent.category.LAUNCHER" /></intent>
     </queries>
 
+    <!-- allowBackup is off because the TV's TLS private key and the PIN live in this app's private storage. -->
     <application
+        android:allowBackup="false"
         android:label="TV Dash"
         android:banner="@drawable/banner"
         android:theme="@android:style/Theme.DeviceDefault.NoActionBar">
