@@ -495,13 +495,13 @@ private fun KeyboardPanel(
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Switch(checked = youTubeMode, onCheckedChange = onYouTubeModeChange)
-            Text("YouTube search (sent when you press Search; off = type live)", Modifier.padding(start = 8.dp))
+            Text("@YouTube", Modifier.padding(start = 8.dp))
         }
         OutlinedTextField(
             value = text,
             onValueChange = onTextChange,
             singleLine = true,
-            label = { Text(if (youTubeMode) "Search on YouTube" else "Typing on TV") },
+            label = { Text(if (youTubeMode) "[Search on YouTube]" else "[Type on TV]") },
             modifier = Modifier.fillMaxWidth().focusRequester(focus),
             keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
             keyboardActions = KeyboardActions(onSearch = { onSubmit() }),
