@@ -9,9 +9,12 @@ object TvProtocol {
 
     private const val MAX_REQUEST_HEADER_LINES = 64
 
-    /** Builds the Wi-Fi URL without accepting authentication data as an argument. */
+    /**
+     * Builds the Wi-Fi URL without accepting authentication data as an argument. The Wi-Fi link is always HTTPS: TV Dash
+     * answers over TLS only, and the phone trusts nothing but the certificate the person verified (see [TvTls]).
+     */
     fun buildWifiUrl(address: String, port: Int, path: String): String =
-        "http://$address:$port/${path.trimStart('/')}"
+        "https://$address:$port/${path.trimStart('/')}"
 
     /** Builds the Bluetooth HTTP request with the PIN only in its header. */
     fun buildBluetoothRequest(path: String, pin: String): String =
