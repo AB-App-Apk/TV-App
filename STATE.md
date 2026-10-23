@@ -46,7 +46,7 @@ The phone connection manager tracks fully connected, Wi-Fi/data-only, Bluetooth-
 - **Trust is by pinned fingerprint, not by a certificate authority.** During setup the phone reads the TV's certificate without sending anything, and the person compares a 64-bit security code (the first 16 hex characters of the SHA-256 fingerprint) with the Security code card on the TV. Only after "It matches" is the fingerprint saved and the PIN sent. With no verified fingerprint the phone sends nothing over Wi-Fi.
 - The phone refuses any other certificate. If TV Dash is reinstalled or its data is cleared, it makes a new certificate and the phone shows a notice and must verify the TV again. Because the TLS handshake fails before any request is made, a phone holding an old PIN no longer sends it and cannot lock itself out.
 - The phone manifest no longer sets `usesCleartextTraffic`, and the TV Dash manifest sets `allowBackup="false"` so the TV's private key is not included in backups.
-- **Known limits:** the PIN is four digits and throttling is per source IP, so a determined attacker on the LAN who changes address gets fresh attempts; the TV's private key sits in app-private storage next to the PIN (not in hardware-backed storage), and the published APKs are still debug builds. The Bluetooth data channel relies on the encryption of Bluetooth pairing.
+- **Known limits:** the PIN is four digits and throttling is per source IP, so a determined attacker on the LAN who changes address gets fresh attempts; the TV's private key sits in app-private storage next to the PIN (not in hardware-backed storage), and the first non-debuggable release APKs still need installation and in-place-update verification on the TV and phone. The Bluetooth data channel relies on the encryption of Bluetooth pairing.
 - The old signing keystore was publicly committed and must be treated as compromised. The replacement key is supplied through GitHub Actions secrets; generated key files are removed from the runner. Removing the old file from the current tree does not erase public Git history.
 
 ## 2. Implemented Tasks
@@ -98,7 +98,7 @@ The phone connection manager tracks fully connected, Wi-Fi/data-only, Bluetooth-
 - GitHub Actions signing secrets: `ANDROID_SIGNING_KEY_BASE64`, `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS`, `ANDROID_KEY_PASSWORD`.
 - Hardcoded signing passwords removed from Gradle build files.
 - Workflow validates the replacement key/alias, limits permissions on the temporary key file, and removes the generated keystore after the build.
-- CI runs unit tests for both modules, assembles both APKs, uploads artifacts, and publishes the stable `latest` release only from `main`/ `master`.
+- CI validates pull requests without signing secrets, then builds non-debuggable release variants on `main`/`master` using the replacement signing key. Unit-test/build jobs have read-only repository permission; only the separate publishing job has `contents: write`. Successful builds publish a source-pinned build-attempt release and refresh the stable `latest` download alias.
 - The shared updater reads `version.txt` and downloads the corresponding APK from the GitHub `latest` release.
 - Signing migration details are in [docs/APK_SIGNING_MIGRATION.md](docs/APK_SIGNING_MIGRATION.md). The replacement-key installation/update path has been verified.
 
