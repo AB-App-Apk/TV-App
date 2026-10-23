@@ -1,8 +1,9 @@
 # TV Dash / TV Remote — Project State
 
-**Last updated:** 2026-10-22  
+**Last updated:** 2026-10-23  
 **Repository:** [AB-App-Apk/TV-App](https://github.com/AB-App-Apk/TV-App)  
-**Verified baseline:** Main Build APK #186 succeeded after Task 7 was merged. Both apps were subsequently confirmed updated successfully.
+**Verified baseline:** Main Build APK #186 succeeded after Task 7 was merged. Both apps were subsequently confirmed updated successfully.  
+**Pending verification:** Wi-Fi encryption (TLS) is implemented in code and unit-tested on a JVM, but it has not yet been run on the real phone and Grennö TV. See [docs/TLS_ACCEPTANCE_CHECKLIST.md](docs/TLS_ACCEPTANCE_CHECKLIST.md).
 
 ## 1. General Overview & Functionality
 
@@ -16,7 +17,7 @@ TV Dash and TV Remote form a two-app system for controlling an Android TV from a
 - Launches installed apps and can be selected as the default Home/launcher screen.
 - TV-side command service for navigation, volume, power, text entry, and app-related requests.
 - Accessibility-service status detection and recovery guidance for actions that depend on it.
-- Displays TV network information and the pairing PIN.
+- Displays TV network information, the pairing PIN, and the **Security code** the phone asks the person to compare.
 
 ### TV Remote — Android phone app
 
@@ -29,8 +30,8 @@ TV Dash and TV Remote form a two-app system for controlling an Android TV from a
 
 | Channel | Purpose |
 |---|---|
-| Wi-Fi HTTP | PIN-authenticated requests to TV Dash on TCP port `8765`. PIN is sent in the `X-TV-PIN` header. |
-| Classic Bluetooth RFCOMM | TV Dash data-channel fallback when Wi-Fi cannot reach the TV; uses the same header-based PIN protocol. |
+| Wi-Fi HTTPS (TLS 1.3 / 1.2) | PIN-authenticated requests to TV Dash on TCP port `8765`. The link is encrypted with TV Dash's self-signed certificate, which the phone pins. PIN is sent in the `X-TV-PIN` header, inside the encrypted link. |
+| Classic Bluetooth RFCOMM | TV Dash data-channel fallback when Wi-Fi cannot reach the TV; uses the same header-based PIN protocol and the encryption of the Bluetooth pairing. |
 | Bluetooth HID | Keyboard/media/control input that can work without TV Dash's data service. |
 
 **Important distinction:** the data fallback is classic Bluetooth **RFCOMM**; keyboard/media input uses **Bluetooth HID**. The current implementation does not provide a BLE data transport.
@@ -41,17 +42,22 @@ The phone connection manager tracks fully connected, Wi-Fi/data-only, Bluetooth-
 
 - PIN query-string authentication has been removed from supported request paths; clients send `X-TV-PIN`.
 - TV-side PIN attempt throttling and cooldowns reject repeated incorrect attempts.
-- **Wi-Fi HTTP is still unencrypted.** Header authentication avoids putting the PIN in URLs and common URL logs, but does not hide the PIN or commands from someone capturing LAN traffic.
+- **Wi-Fi is encrypted.** TV Dash makes one self-signed EC P-256 certificate on first start and keeps it in its private storage (`shared/TvTls.kt`, `TvTlsStore.kt`). Its HTTPS listener accepts TLS 1.3 and 1.2 only; a client that does not speak TLS gets no answer and cannot use up PIN attempts.
+- **Trust is by pinned fingerprint, not by a certificate authority.** During setup the phone reads the TV's certificate without sending anything, and the person compares a 64-bit security code (the first 16 hex characters of the SHA-256 fingerprint) with the Security code card on the TV. Only after "It matches" is the fingerprint saved and the PIN sent. With no verified fingerprint the phone sends nothing over Wi-Fi.
+- The phone refuses any other certificate. If TV Dash is reinstalled or its data is cleared, it makes a new certificate and the phone shows a notice and must verify the TV again. Because the TLS handshake fails before any request is made, a phone holding an old PIN no longer sends it and cannot lock itself out.
+- The phone manifest no longer sets `usesCleartextTraffic`, and the TV Dash manifest sets `allowBackup="false"` so the TV's private key is not included in backups.
+- **Known limits:** the PIN is four digits and throttling is per source IP, so a determined attacker on the LAN who changes address gets fresh attempts; the TV's private key sits in app-private storage next to the PIN (not in hardware-backed storage), and the published APKs are still debug builds. The Bluetooth data channel relies on the encryption of Bluetooth pairing.
 - The old signing keystore was publicly committed and must be treated as compromised. The replacement key is supplied through GitHub Actions secrets; generated key files are removed from the runner. Removing the old file from the current tree does not erase public Git history.
 
 ## 2. Implemented Tasks
 
 ### TV Dash and TV-side components
 
-- Dashboard cards for time/date, network status, and storage, with links to relevant system settings.
+- Dashboard cards for time/date, network status, storage and the phone-remote PIN, with links to relevant system settings.
+- Security code card showing the short code of the TV's certificate fingerprint.
 - Installed-app grid with available app banners/icons, TV focus handling, D-pad navigation, and app launch.
 - Default Home/launcher support.
-- TV-side HTTP service on port `8765`, running as a foreground service, with health/recovery behaviour.
+- TV-side HTTPS service on port `8765`, running as a foreground service, with health/recovery behaviour.
 - Bluetooth RFCOMM server for remote data requests.
 - Command handlers for navigation, volume, power, text entry, app operations, and supported YouTube actions.
 - Accessibility-service status detection, recovery UI, and re-enable support when device permissions allow it.
@@ -63,10 +69,11 @@ The phone connection manager tracks fully connected, Wi-Fi/data-only, Bluetooth-
 - Bluetooth pairing/setup flow.
 - Bluetooth HID keyboard/media transport with key timing and supported D-pad, enter, back/home, volume, media, and wake actions.
 - Bluetooth RFCOMM client with warm-link handling, heartbeat, serialized requests, timeouts, retry behaviour, and cleanup.
-- Wi-Fi HTTP client and shared routing through `TvLink`.
+- Wi-Fi HTTPS client with certificate pinning and shared routing through `TvLink`.
+- Security-code verification step in setup, and a one-time verification prompt for phones that were set up before Wi-Fi was encrypted.
 - Connection manager and per-command transport selection.
 - Brief FIFO command queue and link retry behaviour during connection loss.
-- Connection diagnostics with radio/permission/configuration state, safe ping, response/route information, and retry-link actions.
+- Connection diagnostics with radio/permission/configuration state, certificate-verification state, safe ping, response/route information, and retry-link actions.
 - Shared update controller used by both apps to check the GitHub `latest` release and invoke Android's package installer.
 
 ### PIN authentication and abuse resistance
@@ -76,6 +83,15 @@ The phone connection manager tracks fully connected, Wi-Fi/data-only, Bluetooth-
 - Case-insensitive header parsing, whitespace trimming, header terminator handling, and a 64-header limit.
 - Per-client PIN failure windows and cooldowns, escalating cooldowns for repeated lockouts, and bounded client tracking.
 - Missing/incorrect PINs are denied; correct PINs do not bypass an active cooldown.
+
+### Wi-Fi encryption (TLS)
+
+- `shared/TvTls.kt` (compiled into both apps): self-signed certificate generation without external libraries, fingerprint and security-code helpers, TLS server context, pinning trust manager, and the read-only fingerprint fetch used during setup.
+- `app/.../TvTlsStore.kt`: creates, saves and restores the TV's key and certificate.
+- `Remote.kt`: TLS-only listener on port `8765`.
+- `TvLink.kt`: HTTPS requests with the pinned certificate; reports a certificate mismatch separately from "TV unreachable".
+- Setup and update paths: see above and in `ConnectionSetup.kt` / `MainActivity.kt` (phone).
+- **Update order:** update TV Dash first, then TV Remote. An older phone cannot talk to the encrypted TV over Wi-Fi (it falls back to Bluetooth if paired), and a new phone cannot reach an older, unencrypted TV over Wi-Fi.
 
 ### Signing, CI, and release workflow
 
@@ -91,25 +107,26 @@ The phone connection manager tracks fully connected, Wi-Fi/data-only, Bluetooth-
 Current automated test files:
 
 - `app/src/test/java/com/example/tvdash/PinAttemptLimiterTest.kt`: failure windows, cooldowns, correct PIN during/after cooldown, per-client isolation, cooldown escalation, and bounded client tracking.
-- `app/src/test/java/com/example/tvdash/TvProtocolTest.kt`: Wi-Fi URL without PIN query parameters, Bluetooth request formatting/CRLF, case-insensitive header parsing, whitespace trimming, missing/unrelated headers, header terminator, and 64-header limit.
+- `app/src/test/java/com/example/tvdash/TvProtocolTest.kt`: Wi-Fi URL is HTTPS and has no PIN query parameters, Bluetooth request formatting/CRLF, case-insensitive header parsing, whitespace trimming, missing/unrelated headers, header terminator, and 64-header limit.
+- `app/src/test/java/com/example/tvdash/TvTlsTest.kt`: the generated certificate is valid and self-signed, fingerprints and security codes, saving and restoring the identity, the pinning trust manager, a real loopback TLS handshake with a matching and a non-matching pin, the fingerprint fetch, and that a plain HTTP request is never answered in plain text.
 
-**Build APK #185** passed on the transport regression branch, including unit tests and APK assembly. After merge, **main Build APK #186** succeeded. Both apps were confirmed updated successfully.
+**Build APK #185** passed on the transport regression branch, including unit tests and APK assembly. After merge, **main Build APK #186** succeeded. Both apps were confirmed updated successfully. The TLS change has not been through CI or the device yet.
 
-The manual acceptance checklist is [docs/DEVICE_ACCEPTANCE_CHECKLIST.md](docs/DEVICE_ACCEPTANCE_CHECKLIST.md). It records reported passes for phone-app backgrounding, phone Wi-Fi loss/recovery through Bluetooth, PIN throttling, and TV restart/reconnection. Additional PIN-header, incorrect-PIN, Bluetooth data, and Wi-Fi recovery checks for Task 6 were also reported passing.
+The manual acceptance checklist is [docs/DEVICE_ACCEPTANCE_CHECKLIST.md](docs/DEVICE_ACCEPTANCE_CHECKLIST.md). It records reported passes for phone-app backgrounding, phone Wi-Fi loss/recovery through Bluetooth, PIN throttling, and TV restart/reconnection. Additional PIN-header, incorrect-PIN, Bluetooth data, and Wi-Fi recovery checks for Task 6 were also reported passing. The TLS-specific checks are in [docs/TLS_ACCEPTANCE_CHECKLIST.md](docs/TLS_ACCEPTANCE_CHECKLIST.md) and have not been run.
 
 ## 3. Recommendations
 
 These are future improvements, not claims of already-implemented functionality.
 
-### Priority 0 — Encrypt Wi-Fi traffic
+### Priority 0 — Run the TLS acceptance checks on the real devices
 
-- Replace cleartext HTTP with an authenticated encrypted transport, such as TLS with a managed trust/pinning model or a cryptographically authenticated session established during pairing.
-- Retain PIN throttling and command authorization after encryption; they address different threats.
-- Do not describe the current header change as protection from LAN packet capture.
+- Wi-Fi encryption is implemented. Before it is relied on, run [docs/TLS_ACCEPTANCE_CHECKLIST.md](docs/TLS_ACCEPTANCE_CHECKLIST.md) on the Grennö GR-R40SMART and the phone, then record the results.
+- Retain PIN throttling and command authorization: they address different threats than encryption.
+- Consider a longer PIN (6+ digits) or a global failure budget, because the throttle is per source IP.
 
 ### Priority 1 — Expand transport regression tests
 
-- Test `TvLink` handover: Wi-Fi failure to RFCOMM fallback, retry backoff, recovery to Wi-Fi, and reported route/state.
+- Test `TvLink` handover: Wi-Fi failure to RFCOMM fallback, retry backoff, recovery to Wi-Fi, and reported route/state, including the certificate-mismatch case.
 - Test connection-manager routing for all four states and command support in each state.
 - Test FIFO queue order/expiry, request timeout and cleanup, malformed replies, and connection-loss races.
 - Add focused tests in the `remote` module where practical and keep CI's unit-test gate required.
@@ -138,15 +155,15 @@ These are future improvements, not claims of already-implemented functionality.
 - Provide a shareable, sanitized diagnostics report with build ID, transport state, last result, and error category; never include the PIN or secrets.
 - Add structured, rate-limited connection state/route logs.
 - Keep protocol formatting/parsing in shared unit-testable helpers and document the RFCOMM/HID distinction.
-- Continue real-device tests on the Grennö GR-R40SMART and target phone; unit tests cannot fully verify Bluetooth behaviour.
+- Continue real-device tests on the Grennö GR-R40SMART and target phone; unit tests cannot fully verify Bluetooth or the device's TLS stack.
 
 ## Repository Map
 
 ```text
-app/       TV Dash app, TV-side services, PIN limiter, unit tests
+app/       TV Dash app, TV-side services, PIN limiter, TLS identity store, unit tests
 remote/    TV Remote app, connection manager, Wi-Fi/RFCOMM/HID transports
-shared/    Protocol helpers and APK update controller
-docs/      Signing migration and real-device acceptance checklist
+shared/    Protocol helpers, TLS helpers and APK update controller
+docs/      Signing migration and real-device acceptance checklists
 .github/   CI tests, APK build/artifacts, and release workflow
 ```
 
@@ -157,4 +174,5 @@ docs/      Signing migration and real-device acceptance checklist
 - **Transport regression coverage:** merged; Build #185 passed.
 - **Main build after merge:** Build #186 passed.
 - **Installed apps:** both apps confirmed updated successfully.
-- **Recommended next work:** encrypt Wi-Fi transport, broaden state/handover tests, review old signing-key history, and confirm the diagnostics-banner styling item still marked pending.
+- **Wi-Fi encryption (TLS):** implemented with a pinned self-signed certificate and a security-code check; awaiting CI and real-device acceptance.
+- **Recommended next work:** run the TLS acceptance checks, broaden state/handover tests, review old signing-key history, and confirm the diagnostics-banner styling item still marked pending.
