@@ -8,10 +8,11 @@ import org.junit.Test
 
 class TvProtocolTest {
     @Test
-    fun wifiUrlNeverContainsPinAndNormalizesLeadingSlash() {
+    fun wifiUrlIsHttpsNeverContainsPinAndNormalizesLeadingSlash() {
         val url = TvProtocol.buildWifiUrl("192.168.1.20", 8765, "/ping")
 
-        assertEquals("http://192.168.1.20:8765/ping", url)
+        assertEquals("https://192.168.1.20:8765/ping", url)
+        assertTrue(url.startsWith("https://"))
         assertFalse(url.contains("pin=", ignoreCase = true))
         assertFalse(url.contains("1234"))
     }
