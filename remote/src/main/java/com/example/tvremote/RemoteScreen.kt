@@ -501,7 +501,7 @@ private fun KeyboardPanel(
             value = text,
             onValueChange = onTextChange,
             singleLine = true,
-            label = { Text(if (youTubeMode) "Search YouTube on the TV" else "Typing on TV") },
+            label = { Text(if (youTubeMode) "Search on YouTube" else "Typing on TV") },
             modifier = Modifier.fillMaxWidth().focusRequester(focus),
             keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
             keyboardActions = KeyboardActions(onSearch = { onSubmit() }),
