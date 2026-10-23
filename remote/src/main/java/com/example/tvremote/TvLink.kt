@@ -2,6 +2,7 @@ package com.example.tvremote
 
 import android.os.SystemClock
 import com.example.tvlink.TvProtocol
+import com.example.tvlink.TvTls
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -14,6 +15,8 @@ import kotlinx.coroutines.withContext
 import java.io.IOException
 import java.net.HttpURLConnection
 import java.net.URL
+import javax.net.ssl.HostnameVerifier
+import javax.net.ssl.HttpsURLConnection
 
 const val TV_PORT = 8765
 
@@ -31,15 +34,20 @@ fun TvReply.bodyOrNull(): String? = (this as? TvReply.Ok)?.body
 enum class Carrier { WIFI, BLUETOOTH }
 
 /**
- * One PIN-protected request to TV Dash. The same request text works on both roads: over Wi-Fi as an HTTP request,
+ * One PIN-protected request to TV Dash. The same request text works on both roads: over Wi-Fi as an HTTPS request,
  * and over the Bluetooth data channel (see [BluetoothDataClient]) when Wi-Fi cannot reach the TV. Everything that
  * talks to the TV goes through here, so every feature gets the Bluetooth road without knowing about it.
  * Never throws; failures become [TvReply].
+ *
+ * The Wi-Fi road is encrypted and trusts exactly one certificate: the one whose SHA-256 fingerprint [fingerprint]
+ * returns, which the person verified during setup. While no fingerprint is saved, nothing is sent over Wi-Fi at all,
+ * so the PIN can never go to a TV that was not verified.
  */
 class TvLink(
     private val host: () -> String,
     private val pin: () -> String,
-    private val bluetooth: BluetoothDataClient? = null
+    private val bluetooth: BluetoothDataClient? = null,
+    private val fingerprint: () -> String = { "" }
 ) {
     private companion object {
         /** After Wi-Fi fails, ask over Bluetooth first for this long instead of waiting for Wi-Fi to time out again. */
@@ -50,6 +58,13 @@ class TvLink(
     val carrier: StateFlow<Carrier> = _carrier.asStateFlow()
 
     @Volatile private var wifiRetryAt = 0L
+
+    /** True when the last Wi-Fi attempt failed because the TV's certificate is not the one that was verified. */
+    @Volatile var certificateMismatch = false
+        private set
+
+    /** True when a TV address is saved but its certificate was never verified, so Wi-Fi is switched off. */
+    val needsVerification: Boolean get() = host().isNotBlank() && fingerprint().isBlank()
 
     suspend fun get(path: String): TvReply {
         if (SystemClock.elapsedRealtime() >= wifiRetryAt) {
@@ -79,23 +94,31 @@ class TvLink(
 
     private suspend fun overWifi(path: String): TvReply = withContext(Dispatchers.IO) {
         val address = host()
-        if (address.isBlank()) return@withContext TvReply.Unreachable
+        val pinned = fingerprint()
+        // No verified certificate, no request: the PIN must never be sent to a peer that was not verified.
+        if (address.isBlank() || pinned.isBlank()) return@withContext TvReply.Unreachable
         try {
-            val c = URL(TvProtocol.buildWifiUrl(address, TV_PORT, path)).openConnection() as HttpURLConnection
+            val c = URL(TvProtocol.buildWifiUrl(address, TV_PORT, path)).openConnection() as HttpsURLConnection
             try {
+                c.sslSocketFactory = TvTls.pinnedSocketFactory(pinned)
+                // The address is an IP, which a certificate for "TV Dash" cannot match by name. The pin is the identity check.
+                c.hostnameVerifier = HostnameVerifier { _, _ -> true }
                 c.requestMethod = "GET"
                 c.setRequestProperty(TvProtocol.PIN_HEADER, pin())
                 c.connectTimeout = 2_000
                 c.readTimeout = 4_000
-                if (c.responseCode == HttpURLConnection.HTTP_OK) {
+                val reply = if (c.responseCode == HttpURLConnection.HTTP_OK) {
                     TvReply.Ok(c.inputStream.bufferedReader().use { it.readText() })
                 } else {
                     TvReply.Rejected(c.responseCode)
                 }
+                certificateMismatch = false
+                reply
             } finally {
                 c.disconnect()
             }
         } catch (e: IOException) {
+            certificateMismatch = TvTls.isCertificateProblem(e)
             TvReply.Unreachable
         }
     }
