@@ -86,6 +86,11 @@ fun HomeScreen() {
         while (true) { delay(1000); value = readStatus(ctx) }
     }
 
+    // The first time, the certificate is made here or in the listener, whichever gets there first: off the main thread.
+    val securityCode by produceState("Preparing...") {
+        value = withContext(Dispatchers.IO) { runCatching { TvTlsStore.shortCode(ctx) }.getOrDefault("Unavailable") }
+    }
+
     LazyVerticalGrid(
         columns = GridCells.Adaptive(200.dp),
         contentPadding = PaddingValues(48.dp),
@@ -122,6 +127,14 @@ fun HomeScreen() {
             }
         }
         item(span = { GridItemSpan(maxLineSpan) }) {
+            DashCard(
+                "Security code",
+                securityCode,
+                "The phone shows this same code when you connect. If it is different, do not continue.",
+                Modifier.fillMaxWidth()
+            ) { }
+        }
+        item(span = { GridItemSpan(maxLineSpan) }) {
             DashCard("Updates", "Build ${upd.installed}", upd.status.ifEmpty { "Select to check for updates" }, Modifier.fillMaxWidth()) {
                 if (!upd.busy) scope.launch { if (upd.available) upd.update() else upd.check() }
             }
@@ -132,4 +145,3 @@ fun HomeScreen() {
         items(apps, key = { it.pkg }) { app -> AppCard(app) }
     }
 }
-
