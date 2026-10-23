@@ -33,7 +33,14 @@ android {
                 this.keyPassword = keyPassword
             }
         }
-        buildTypes { getByName("debug") { signingConfig = signingConfigs.getByName("shared") } }
+        buildTypes {
+            getByName("debug") { signingConfig = signingConfigs.getByName("shared") }
+            getByName("release") {
+                signingConfig = signingConfigs.getByName("shared")
+                isDebuggable = false
+                isMinifyEnabled = false
+            }
+        }
     }
     buildFeatures { compose = true }
     compileOptions {
