@@ -19,13 +19,17 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
+import com.example.tvlink.TvTls
 import com.example.updater.UpdateController
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import org.json.JSONArray
 
@@ -50,8 +54,9 @@ class MainActivity : ComponentActivity() {
 }
 
 /**
- * The long-lived pieces of the remote, built once. The TV address, PIN and MAC address are read from the saved
- * settings each time they are needed, so changing the TV takes effect without rebuilding anything.
+ * The long-lived pieces of the remote, built once. The TV address, PIN, MAC address and the verified certificate
+ * fingerprint are read from the saved settings each time they are needed, so changing the TV takes effect without
+ * rebuilding anything.
  */
 class RemoteGraph(context: Context) {
     private val app: Context = context.applicationContext
@@ -60,7 +65,7 @@ class RemoteGraph(context: Context) {
     private fun saved(key: String): String = prefs.getString(key, "")?.trim().orEmpty()
 
     val btData = BluetoothDataClientProvider.acquireGraphClient(app) { saved("pin") }
-    val link = TvLink({ saved("host") }, { saved("pin") }, btData)
+    val link = TvLink({ saved("host") }, { saved("pin") }, btData, { saved("tls_fp") })
     val tvPower = GrennoTvRemoteManager(app)
     val bluetooth = BluetoothHidTransport(app)
     val connection = ConnectionManager(app, link, bluetooth)
@@ -92,12 +97,25 @@ class RemoteGraphHolder(context: Context) : ViewModel() {
     }
 }
 
+/** A TV certificate the person has been asked to verify by comparing its security code with the one on the TV. */
+private class PendingVerification(
+    val host: String,
+    val pin: String,
+    val mac: String,
+    val fingerprint: String,
+    /** A different certificate was verified before: TV Dash was reinstalled, or this is another TV. */
+    val replacesPrevious: Boolean
+)
+
 /**
  * The app: the way-in screens (IP address and PIN, or Bluetooth), the remote (Layer 3), and the Apps list.
  *
  * THE RULE: the remote opens only when [setupComplete] is true, and only two places ever set it: the TV answered the
  * IP address and PIN, or the Bluetooth keyboard link came up. Leaving the form blank, a wrong address, a wrong PIN,
- * or a pairing that did not connect all leave the person where they are.
+ * a certificate that was not verified, or a pairing that did not connect all leave the person where they are.
+ *
+ * Wi-Fi is encrypted. Before the IP address and PIN are sent, the phone reads the TV's certificate and asks the person
+ * to compare a short security code with the one on the TV's dashboard. Only then is the certificate pinned and the PIN sent.
  */
 @Composable
 fun RemoteApp(graph: RemoteGraph, viewModel: RemoteViewModel) {
@@ -118,6 +136,12 @@ fun RemoteApp(graph: RemoteGraph, viewModel: RemoteViewModel) {
     var setupComplete by remember { mutableStateOf(gate.isComplete) }
     var changingTv by remember { mutableStateOf(false) }
     var setupPage by remember { mutableStateOf("ip") }
+
+    // The certificate the person verified, and the one being verified right now.
+    var pinnedFingerprint by remember { mutableStateOf(gate.fingerprint) }
+    var verification by remember { mutableStateOf<PendingVerification?>(null) }
+    var verifiedThisSession by remember { mutableStateOf("") }
+    var automaticPromptDismissed by remember { mutableStateOf(false) }
 
     var screen by remember { mutableStateOf("remote") }
     var apps by remember { mutableStateOf(listOf<Pair<String, String>>()) }
@@ -159,7 +183,58 @@ fun RemoteApp(graph: RemoteGraph, viewModel: RemoteViewModel) {
         }
     }
 
-    /** The first way in. Opens the remote only if the fields are right AND the TV answers with that address and PIN. */
+    /** The last step: the TV must answer this address and PIN over the verified, encrypted link. */
+    suspend fun finishWithIp(tvHost: String, tvPin: String, tvMac: String, fingerprint: String) {
+        when (ConnectionInput.askTv(tvHost, tvPin, fingerprint)) {
+            TvCheck.ACCEPTED -> {
+                gate.pinFingerprint(fingerprint)
+                gate.completeWithIp(tvHost, tvPin, tvMac)
+                pinnedFingerprint = gate.fingerprint
+                host = tvHost
+                pin = tvPin
+                msg = ""
+                graph.connection.retryNow()
+                setupComplete = true
+                changingTv = false
+            }
+            TvCheck.WRONG_PIN -> {
+                pinError = true
+                toast("The TV did not accept that PIN. Check the PIN on the TV's Phone remote card.")
+            }
+            TvCheck.CERTIFICATE -> {
+                hostError = true
+                toast("The TV's certificate changed while connecting. Try again and compare the security code.")
+            }
+            TvCheck.UNREACHABLE -> {
+                hostError = true
+                toast("Can't reach the TV at that address. Is TV Dash open on the TV, on the same Wi-Fi?")
+            }
+        }
+    }
+
+    /**
+     * The first step after the fields look right: read the TV's certificate (nothing is sent yet). A certificate that is
+     * already verified goes straight on. A new or different one is shown to the person to compare first.
+     */
+    fun verifyTv(tvHost: String, tvPin: String, tvMac: String) {
+        if (checking) return
+        scope.launch {
+            checking = true
+            val seen = ConnectionInput.readFingerprint(tvHost)
+            when {
+                seen == null -> {
+                    hostError = true
+                    toast("Can't reach the TV securely at that address. Open TV Dash on the TV, on the same Wi-Fi, and update it to the latest build.")
+                }
+                TvTls.sameFingerprint(seen, pinnedFingerprint) || TvTls.sameFingerprint(seen, verifiedThisSession) ->
+                    finishWithIp(tvHost, tvPin, tvMac, seen)
+                else -> verification = PendingVerification(tvHost, tvPin, tvMac, seen, pinnedFingerprint.isNotBlank())
+            }
+            checking = false
+        }
+    }
+
+    /** The first way in. Opens the remote only if the fields are right, the certificate is verified AND the TV answers. */
     fun connectWithIp() {
         if (checking) return
         hostError = false
@@ -177,30 +252,40 @@ fun RemoteApp(graph: RemoteGraph, viewModel: RemoteViewModel) {
                     toast("The MAC address needs 12 hex digits, like AA:BB:CC:DD:EE:FF.")
                     return
                 }
-                scope.launch {
-                    checking = true
-                    when (ConnectionInput.askTv(input.host, input.pin)) {
-                        TvCheck.ACCEPTED -> {
-                            gate.completeWithIp(input.host, input.pin, mac.trim())
-                            host = input.host
-                            pin = input.pin
-                            msg = ""
-                            graph.connection.retryNow()
-                            setupComplete = true
-                            changingTv = false
-                        }
-                        TvCheck.WRONG_PIN -> {
-                            pinError = true
-                            toast("The TV did not accept that PIN. Check the PIN on the TV's Phone remote card.")
-                        }
-                        TvCheck.UNREACHABLE -> {
-                            hostError = true
-                            toast("Can't reach the TV at that address. Is TV Dash open on the TV, on the same Wi-Fi?")
-                        }
-                    }
-                    checking = false
-                }
+                verifyTv(input.host, input.pin, mac.trim())
             }
+        }
+    }
+
+    // A phone set up before Wi-Fi was encrypted has an address and PIN but no verified certificate, so Wi-Fi stays off
+    // until it is verified once. Offer that on its own as soon as the TV answers, a few tries over about 30 seconds.
+    val needsVerification = setupComplete && gate.method != "bluetooth" && host.isNotBlank() && pinnedFingerprint.isBlank()
+    LaunchedEffect(needsVerification, automaticPromptDismissed) {
+        if (needsVerification && !automaticPromptDismissed) {
+            repeat(10) {
+                if (verification != null || pinnedFingerprint.isNotBlank()) return@LaunchedEffect
+                val seen = ConnectionInput.readFingerprint(host)
+                if (seen != null) {
+                    verification = PendingVerification(host, pin, mac, seen, replacesPrevious = false)
+                    return@LaunchedEffect
+                }
+                delay(3_000)
+            }
+        }
+    }
+
+    // What the person should know while Wi-Fi cannot be used because of the certificate.
+    val securityNotice by produceState("") {
+        while (true) {
+            value = when {
+                link.certificateMismatch ->
+                    "The TV's security certificate is not the one you verified. If you reinstalled TV Dash, tap Change TV, then " +
+                        "Connect, and compare the security code. If not, do not continue: another device may be answering at this address."
+                link.needsVerification ->
+                    "Wi-Fi control is off until you verify the TV's security code: tap Change TV, then Connect."
+                else -> ""
+            }
+            delay(2_000)
         }
     }
 
@@ -251,7 +336,7 @@ fun RemoteApp(graph: RemoteGraph, viewModel: RemoteViewModel) {
             onYouTubeModeChange = { ytMode = it; prefs.edit().putBoolean("yt_mode", it).apply() },
             onOpenAppsList = { screen = "apps"; loadApps() },
             onChangeTv = { changingTv = true; setupPage = "ip" },
-            notice = msg,
+            notice = msg.ifEmpty { securityNotice },
             footer = { openGuidelines ->
                 FitOutlinedButton(
                     label = "Connection diagnostics",
@@ -263,11 +348,69 @@ fun RemoteApp(graph: RemoteGraph, viewModel: RemoteViewModel) {
             }
         )
     }
+
+    verification?.let { request ->
+        VerifyTvDialog(
+            request = request,
+            onConfirm = {
+                verification = null
+                verifiedThisSession = request.fingerprint
+                scope.launch {
+                    checking = true
+                    finishWithIp(request.host, request.pin, request.mac, request.fingerprint)
+                    checking = false
+                }
+            },
+            onCancel = {
+                verification = null
+                automaticPromptDismissed = true
+            }
+        )
+    }
+}
+
+/** Asks the person to compare the security code. Nothing has been sent to the TV when this is shown. */
+@Composable
+private fun VerifyTvDialog(request: PendingVerification, onConfirm: () -> Unit, onCancel: () -> Unit) {
+    AlertDialog(
+        onDismissRequest = onCancel,
+        title = { Text("Verify your TV") },
+        text = {
+            Column(
+                Modifier.heightIn(max = 420.dp).verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                Text("Wi-Fi control is now encrypted. On the TV, open TV Dash. The Security code card must show exactly this code:")
+                Text(
+                    TvTls.shortCode(request.fingerprint),
+                    style = MaterialTheme.typography.headlineSmall,
+                    fontFamily = FontFamily.Monospace,
+                    fontWeight = FontWeight.Bold
+                )
+                if (request.replacesPrevious) {
+                    Text(
+                        "This is not the TV you verified before. That is normal after TV Dash is reinstalled, or when you choose " +
+                            "another TV. If neither is true, tap Cancel.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error
+                    )
+                }
+                Text(
+                    "If the codes differ, tap Cancel: another device on this Wi-Fi may be pretending to be the TV. " +
+                        "Nothing has been sent to the TV yet, and the PIN is sent only after you confirm.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        },
+        confirmButton = { FitTextButton(label = "It matches", onClick = onConfirm) },
+        dismissButton = { FitTextButton(label = "Cancel", onClick = onCancel) }
+    )
 }
 
 /**
  * The way-in form: IP address and PIN with Connect, or Bluetooth. Connect does not open the remote by itself; it only
- * asks [onConnect], which checks the fields and the TV first.
+ * asks [onConnect], which checks the fields, the TV's security code and the TV first.
  */
 @Composable
 private fun SetupForm(
@@ -287,7 +430,10 @@ private fun SetupForm(
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
         Text("Connect to your TV", style = MaterialTheme.typography.titleLarge)
-        Text("Open TV Dash on the TV. The Phone remote card shows the PIN and the IP address.")
+        Text(
+            "Open TV Dash on the TV. The Phone remote card shows the PIN and the IP address. The Security code card shows " +
+                "a code you will be asked to compare, so the link can be encrypted."
+        )
         OutlinedTextField(
             value = host, onValueChange = onHostChange, label = { Text("TV IP address") },
             isError = hostError, singleLine = true, modifier = Modifier.fillMaxWidth(),
