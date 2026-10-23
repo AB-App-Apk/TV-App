@@ -159,13 +159,10 @@ class TvTlsTest {
     }
 
     @Test
-    fun fetchFingerprintReturnsNullWhenNothingListens() {
-        val tv = TvTls.generate()
-        val server = echoServer(tv)
-        val port = server.localPort
-        server.close()
-
-        assertNull(TvTls.fetchFingerprint("127.0.0.1", port, timeoutMs = 1_000))
+    fun fetchFingerprintReturnsNullWhenNoServicePortIsAvailable() {
+        // Port 0 is never a listening destination port; unlike a just-closed ephemeral port,
+        // it cannot be claimed by another local listener between closing and connecting.
+        assertNull(TvTls.fetchFingerprint("127.0.0.1", 0, timeoutMs = 1_000))
     }
 
     @Test
