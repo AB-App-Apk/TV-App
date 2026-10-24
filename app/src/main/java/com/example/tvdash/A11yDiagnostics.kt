@@ -90,7 +90,7 @@ object A11yDiagnostics {
                 Locale.getDefault()
             ).format(Date(last.timestamp))
             val description = last.description
-                ?.replace(Regex("\\\\s+"), " ")
+                ?.replace(Regex("\\s+"), " ")
                 ?.takeIf { it.isNotBlank() }
                 ?.take(240)
                 ?: "not provided by Android"
