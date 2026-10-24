@@ -117,15 +117,21 @@ object A11yDiagnostics {
     }
 
     /** Checks the per-service list independently of the master switch and live service binding. */
-    private fun serviceListed(ctx: Context): String = try {
-        val raw = Settings.Secure.getString(
-            ctx.contentResolver,
-            Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES
-        ) ?: return "no (service list empty)"
-        val expected = ComponentName(ctx, PowerAccessibilityService::class.java)
-        if (raw.split(':').any { ComponentName.unflattenFromString(it) == expected }) "yes" else "no"
-    } catch (e: Exception) {
-        "unknown (${e.javaClass.simpleName})"
+    private fun serviceListed(ctx: Context): String {
+        return try {
+            val raw = Settings.Secure.getString(
+                ctx.contentResolver,
+                Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES
+            )
+            if (raw.isNullOrBlank()) {
+                "no (service list empty)"
+            } else {
+                val expected = ComponentName(ctx, PowerAccessibilityService::class.java)
+                if (raw.split(':').any { ComponentName.unflattenFromString(it) == expected }) "yes" else "no"
+            }
+        } catch (e: Exception) {
+            "unknown (${e.javaClass.simpleName})"
+        }
     }
 
     private fun restrictedSettings(ctx: Context): String {
