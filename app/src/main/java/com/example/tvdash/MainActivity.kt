@@ -75,8 +75,9 @@ fun HomeScreen() {
     var apps by remember { mutableStateOf<List<AppEntry>>(emptyList()) }
     var reload by remember { mutableIntStateOf(0) }
     LifecycleEventEffect(Lifecycle.Event.ON_RESUME) {
+        // Re-check app tiles only. Accessibility recovery remains user-triggered, so resuming
+        // from Settings cannot silently rewrite secure system settings or reopen a settings loop.
         reload++
-        if (AccessGuard.state(ctx) == AccessState.DROPPED) AccessGuard.reEnable(ctx)
     }
     LaunchedEffect(Trim.level) { if (Trim.level > 0) apps = emptyList() }
     val access = AccessGuard.state(ctx)
@@ -109,9 +110,9 @@ fun HomeScreen() {
     ) {
         if (access != AccessState.OK) item(span = { GridItemSpan(maxLineSpan) }) {
             val baseMessage = when (access) {
-                AccessState.CONNECTING -> "Waiting for Android to start the accessibility service."
+                AccessState.CONNECTING -> "Waiting for Android to start the accessibility service. Select to open its settings if it stays stuck."
                 AccessState.DROPPED -> "Android stopped the accessibility service. Select to try recovery."
-                else -> "Accessibility is off. Select to open its settings."
+                else -> "Accessibility is off. Enable TV Dash in Accessibility settings. If Android turns the switch off again, allow restricted settings from TV Dash app info first, if that option is available."
             }
             DashCard(
                 "Remote control",
@@ -119,6 +120,14 @@ fun HomeScreen() {
                 if (a11yFacts.isEmpty()) baseMessage else "$baseMessage\n\n$a11yFacts",
                 Modifier.fillMaxWidth()
             ) { AccessGuard.recover(ctx) }
+        }
+        if (access == AccessState.OFF) item(span = { GridItemSpan(maxLineSpan) }) {
+            DashCard(
+                "Restricted settings",
+                "Open TV Dash app info",
+                "On Android 13+: open the ⋮ menu and choose Allow restricted settings, if available. Then return and enable TV Dash under Accessibility.",
+                Modifier.fillMaxWidth()
+            ) { AccessGuard.openAppInfoScreen(ctx) }
         }
         item(span = { GridItemSpan(maxLineSpan) }) {
             Row(horizontalArrangement = Arrangement.spacedBy(20.dp), modifier = Modifier.fillMaxWidth()) {
