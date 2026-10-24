@@ -82,10 +82,13 @@ fun HomeScreen() {
     val access = AccessGuard.state(ctx)
     LaunchedEffect(reload) { apps = withContext(Dispatchers.IO) { loadApps(ctx) } }
 
-    // Read-only diagnostic evidence; refresh when returning to the dashboard or when service state changes.
+    // Refresh the diagnostic snapshot while visible; Settings changes can happen while this Activity is paused.
     val a11yFacts by produceState("", access, reload) {
-        value = if (access == AccessState.OK) "" else
-            withContext(Dispatchers.IO) { A11yDiagnostics.summary(ctx) }
+        while (true) {
+            value = if (access == AccessState.OK) "" else
+                withContext(Dispatchers.IO) { A11yDiagnostics.summary(ctx) }
+            delay(2_000)
+        }
     }
 
     val status by produceState(readStatus(ctx)) {

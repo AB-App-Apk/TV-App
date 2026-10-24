@@ -3,9 +3,11 @@ package com.example.tvdash
 import android.app.ActivityManager
 import android.app.AppOpsManager
 import android.app.ApplicationExitInfo
+import android.content.ComponentName
 import android.content.Context
 import android.os.Build
 import android.os.Process
+import android.provider.Settings
 import org.json.JSONArray
 import org.json.JSONObject
 import java.text.SimpleDateFormat
@@ -25,6 +27,10 @@ object A11yDiagnostics {
     private val eventLock = Any()
 
     fun summary(ctx: Context): String = listOf(
+        "Diagnostics refreshed: ${timestampNow()}",
+        "Accessibility master switch: ${masterSwitch(ctx)}",
+        "TV Dash listed as enabled: ${serviceListed(ctx)}",
+        "Accessibility service bound: ${if (PowerAccessibilityService.instance != null) "yes" else "no"}",
         "Restricted settings app-op: ${restrictedSettings(ctx)}",
         "Install source: ${installSource(ctx)}",
         "Recent runtime events (chronological):\n${recentEvents(ctx)}",
@@ -92,6 +98,39 @@ object A11yDiagnostics {
             }.joinToString("\n").ifBlank { "none recorded yet" }
         } catch (e: Exception) {
             "unavailable (${e.javaClass.simpleName})"
+        }
+    }
+
+    private fun timestampNow(): String =
+        SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS z", Locale.getDefault())
+            .format(Date(System.currentTimeMillis()))
+
+    private fun masterSwitch(ctx: Context): String = try {
+        if (Settings.Secure.getInt(
+                ctx.contentResolver,
+                Settings.Secure.ACCESSIBILITY_ENABLED,
+                0
+            ) == 1
+        ) "ON" else "OFF"
+    } catch (e: Exception) {
+        "unknown (${e.javaClass.simpleName})"
+    }
+
+    /** Checks the per-service list independently of the master switch and live service binding. */
+    private fun serviceListed(ctx: Context): String {
+        return try {
+            val raw = Settings.Secure.getString(
+                ctx.contentResolver,
+                Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES
+            )
+            if (raw.isNullOrBlank()) {
+                "no (service list empty)"
+            } else {
+                val expected = ComponentName(ctx, PowerAccessibilityService::class.java)
+                if (raw.split(':').any { ComponentName.unflattenFromString(it) == expected }) "yes" else "no"
+            }
+        } catch (e: Exception) {
+            "unknown (${e.javaClass.simpleName})"
         }
     }
 
