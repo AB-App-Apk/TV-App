@@ -5,6 +5,7 @@ import android.accessibilityservice.AccessibilityService
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
+import android.net.Uri
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Handler
@@ -99,9 +100,31 @@ object AccessGuard {
         }
     }
 
-    /** What a tap on the dashboard warning does: repair silently if allowed, otherwise open the exact screen. */
+    /**
+     * Handles an explicit tap on the dashboard warning.
+     * OFF and CONNECTING are setup states: never rewrite Secure Settings for them.
+     * A previously enabled but unbound service may be repaired after the user taps.
+     */
     fun recover(ctx: Context) {
-        if (!reEnable(ctx, force = true)) openServiceScreen(ctx)
+        when (state(ctx)) {
+            AccessState.OFF, AccessState.CONNECTING -> openServiceScreen(ctx)
+            AccessState.DROPPED -> if (!reEnable(ctx, force = true)) openServiceScreen(ctx)
+            AccessState.OK -> Unit
+        }
+    }
+
+    /** Opens the app's own details page so the user can approve restricted settings if the TV exposes it. */
+    fun openAppInfoScreen(ctx: Context) {
+        val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+            data = Uri.fromParts("package", ctx.packageName, null)
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+        try {
+            ctx.startActivity(intent)
+        } catch (e: Exception) {
+            Log.w(TAG, "could not open app info; falling back to Accessibility settings", e)
+            openServiceScreen(ctx)
+        }
     }
 
     /** Opens this service's own settings page (Android 14+), or the general Accessibility list. */
