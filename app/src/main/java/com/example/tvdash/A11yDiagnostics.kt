@@ -19,10 +19,10 @@ object A11yDiagnostics {
     private const val RESTRICTED_OP = "android:access_restricted_settings"
 
     fun summary(ctx: Context): String = listOf(
-        "Restricted settings app-op: \${restrictedSettings(ctx)}",
-        "Install source: \${installSource(ctx)}",
-        "Most recent recorded app process exit:\n\${lastProcessExit(ctx)}",
-        "Self-enable permission: \${if (AccessGuard.canSelfHeal(ctx)) "granted" else "not granted"}"
+        "Restricted settings app-op: ${restrictedSettings(ctx)}",
+        "Install source: ${installSource(ctx)}",
+        "Most recent recorded app process exit:\n${lastProcessExit(ctx)}",
+        "Self-enable permission: ${if (AccessGuard.canSelfHeal(ctx)) "granted" else "not granted"}"
     ).joinToString("\n")
 
     private fun restrictedSettings(ctx: Context): String {
@@ -41,7 +41,7 @@ object A11yDiagnostics {
                 else -> "unknown mode $mode"
             }
         } catch (e: Exception) {
-            "unknown (\${e.javaClass.simpleName})"
+            "unknown (${e.javaClass.simpleName})"
         }
     }
 
@@ -57,7 +57,7 @@ object A11yDiagnostics {
                 installer
             }
         } catch (e: Exception) {
-            "unknown (\${e.javaClass.simpleName})"
+            "unknown (${e.javaClass.simpleName})"
         }
     }
 
@@ -83,12 +83,7 @@ object A11yDiagnostics {
                 ApplicationExitInfo.REASON_USER_STOPPED -> "user stopped app"
                 ApplicationExitInfo.REASON_DEPENDENCY_DIED -> "dependency died"
                 ApplicationExitInfo.REASON_OTHER -> "other/system reason"
-                ApplicationExitInfo.REASON_FREEZER -> "frozen process"
-                ApplicationExitInfo.REASON_PACKAGE_STATE_CHANGE -> "package state changed"
-                ApplicationExitInfo.REASON_PACKAGE_UPDATED -> "package updated"
-                ApplicationExitInfo.REASON_MEMORY_LIMITER -> "memory limit exceeded"
-                ApplicationExitInfo.REASON_ANOMALY -> "system anomaly rule"
-                else -> "reason code \${last.reason}"
+                else -> "reason code ${last.reason}"
             }
             val timestamp = SimpleDateFormat(
                 "yyyy-MM-dd HH:mm:ss.SSS z",
@@ -102,10 +97,10 @@ object A11yDiagnostics {
 
             "Reason: $reason\n" +
                 "Time: $timestamp\n" +
-                "Process: \${last.processName} (PID \${last.pid}), status \${last.status}\n" +
+                "Process: ${last.processName} (PID ${last.pid}), status ${last.status}\n" +
                 "System detail: $description"
         } catch (e: Exception) {
-            "unavailable (\${e.javaClass.simpleName})"
+            "unavailable (${e.javaClass.simpleName})"
         }
     }
 }
