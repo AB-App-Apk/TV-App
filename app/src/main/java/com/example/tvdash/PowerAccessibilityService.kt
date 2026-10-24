@@ -38,18 +38,21 @@ class PowerAccessibilityService : AccessibilityService() {
     }
 
     override fun onServiceConnected() {
+        A11yDiagnostics.recordEvent(this, "a11y-connected")
         Log.i(TAG, "lifecycle=onServiceConnected pid=" + android.os.Process.myPid() + " elapsedMs=" + SystemClock.elapsedRealtime())
         super.onServiceConnected()
         safely("onServiceConnected") { attach() }
     }
 
     override fun onRebind(intent: Intent?) {
+        A11yDiagnostics.recordEvent(this, "a11y-rebind")
         Log.i(TAG, "lifecycle=onRebind pid=" + android.os.Process.myPid() + " elapsedMs=" + SystemClock.elapsedRealtime())
         super.onRebind(intent)
         safely("onRebind") { attach() }
     }
 
     override fun onUnbind(intent: Intent?): Boolean {
+        A11yDiagnostics.recordEvent(this, "a11y-unbind", "system unbound service")
         Log.w(TAG, "lifecycle=onUnbind pid=" + android.os.Process.myPid() + " elapsedMs=" + SystemClock.elapsedRealtime())
         safely("onUnbind") { detach("unbound by the system") }
         super.onUnbind(intent)
@@ -57,6 +60,7 @@ class PowerAccessibilityService : AccessibilityService() {
     }
 
     override fun onDestroy() {
+        A11yDiagnostics.recordEvent(this, "a11y-destroyed")
         Log.w(TAG, "lifecycle=onDestroy pid=" + android.os.Process.myPid() + " elapsedMs=" + SystemClock.elapsedRealtime())
         safely("onDestroy") { detach("destroyed") }
         super.onDestroy()
@@ -81,6 +85,7 @@ class PowerAccessibilityService : AccessibilityService() {
     private fun attach() {
         instance = this
         AccessGuard.onConnected()
+        A11yDiagnostics.recordEvent(this, "a11y-attach", "requesting remote listener")
         Log.i(TAG, "requesting RemoteService after accessibility connect pid=" + android.os.Process.myPid() + " elapsedMs=" + SystemClock.elapsedRealtime())
         RemoteService.ensureRunning(this)
         handler.removeCallbacks(watchdog)
