@@ -82,6 +82,12 @@ fun HomeScreen() {
     val access = AccessGuard.state(ctx)
     LaunchedEffect(reload) { apps = withContext(Dispatchers.IO) { loadApps(ctx) } }
 
+    // Read-only diagnostic evidence; refresh when returning to the dashboard or when service state changes.
+    val a11yFacts by produceState("", access, reload) {
+        value = if (access == AccessState.OK) "" else
+            withContext(Dispatchers.IO) { A11yDiagnostics.summary(ctx) }
+    }
+
     val status by produceState(readStatus(ctx)) {
         while (true) { delay(1000); value = readStatus(ctx) }
     }
@@ -99,14 +105,15 @@ fun HomeScreen() {
         modifier = Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)
     ) {
         if (access != AccessState.OK) item(span = { GridItemSpan(maxLineSpan) }) {
+            val baseMessage = when (access) {
+                AccessState.CONNECTING -> "Waiting for Android to start the accessibility service."
+                AccessState.DROPPED -> "Android stopped the accessibility service. Select to try recovery."
+                else -> "Accessibility is off. Select to open its settings."
+            }
             DashCard(
                 "Remote control",
                 when (access) { AccessState.CONNECTING -> "Starting..."; AccessState.DROPPED -> "Paused"; else -> "Off" },
-                when (access) {
-                    AccessState.CONNECTING -> "Waiting for Android to start the accessibility service."
-                    AccessState.DROPPED -> "Android stopped the accessibility service. Select to turn it back on."
-                    else -> "Accessibility is off. Select to turn it on."
-                },
+                if (a11yFacts.isEmpty()) baseMessage else "$baseMessage\n\n$a11yFacts",
                 Modifier.fillMaxWidth()
             ) { AccessGuard.recover(ctx) }
         }

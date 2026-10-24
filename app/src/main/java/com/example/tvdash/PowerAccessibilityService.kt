@@ -38,22 +38,26 @@ class PowerAccessibilityService : AccessibilityService() {
     }
 
     override fun onServiceConnected() {
+        Log.i(TAG, "lifecycle=onServiceConnected pid=" + android.os.Process.myPid() + " elapsedMs=" + SystemClock.elapsedRealtime())
         super.onServiceConnected()
         safely("onServiceConnected") { attach() }
     }
 
     override fun onRebind(intent: Intent?) {
+        Log.i(TAG, "lifecycle=onRebind pid=" + android.os.Process.myPid() + " elapsedMs=" + SystemClock.elapsedRealtime())
         super.onRebind(intent)
         safely("onRebind") { attach() }
     }
 
     override fun onUnbind(intent: Intent?): Boolean {
+        Log.w(TAG, "lifecycle=onUnbind pid=" + android.os.Process.myPid() + " elapsedMs=" + SystemClock.elapsedRealtime())
         safely("onUnbind") { detach("unbound by the system") }
         super.onUnbind(intent)
         return true // ask for onRebind() if Android binds this same instance again
     }
 
     override fun onDestroy() {
+        Log.w(TAG, "lifecycle=onDestroy pid=" + android.os.Process.myPid() + " elapsedMs=" + SystemClock.elapsedRealtime())
         safely("onDestroy") { detach("destroyed") }
         super.onDestroy()
     }
@@ -77,6 +81,7 @@ class PowerAccessibilityService : AccessibilityService() {
     private fun attach() {
         instance = this
         AccessGuard.onConnected()
+        Log.i(TAG, "requesting RemoteService after accessibility connect pid=" + android.os.Process.myPid() + " elapsedMs=" + SystemClock.elapsedRealtime())
         RemoteService.ensureRunning(this)
         handler.removeCallbacks(watchdog)
         handler.postDelayed(watchdog, WATCHDOG_MS)
