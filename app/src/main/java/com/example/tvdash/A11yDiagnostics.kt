@@ -21,13 +21,13 @@ object A11yDiagnostics {
     private const val RESTRICTED_OP = "android:access_restricted_settings"
     private const val EVENTS_PREFS = "a11y_diagnostics"
     private const val EVENTS_KEY = "recent_events"
-    private const val MAX_EVENTS = 6
+    private const val MAX_EVENTS = 10
     private val eventLock = Any()
 
     fun summary(ctx: Context): String = listOf(
         "Restricted settings app-op: ${restrictedSettings(ctx)}",
         "Install source: ${installSource(ctx)}",
-        "Recent runtime events (oldest first):\n${recentEvents(ctx)}",
+        "Recent runtime events (chronological):\n${recentEvents(ctx)}",
         "Most recent recorded app process exit:\n${lastProcessExit(ctx)}",
         "Self-enable permission: ${if (AccessGuard.canSelfHeal(ctx)) "granted" else "not granted"}"
     ).joinToString("\n")
@@ -79,8 +79,8 @@ object A11yDiagnostics {
             val events = JSONArray(prefs.getString(EVENTS_KEY, "[]") ?: "[]")
             if (events.length() == 0) return "none recorded yet"
 
-            val formatter = SimpleDateFormat("HH:mm:ss", Locale.getDefault())
-            val start = (events.length() - 4).coerceAtLeast(0)
+            val formatter = SimpleDateFormat("MM-dd HH:mm:ss", Locale.getDefault())
+            val start = (events.length() - 6).coerceAtLeast(0)
             (start until events.length()).mapNotNull { i ->
                 events.optJSONObject(i)?.let { event ->
                     val time = formatter.format(Date(event.optLong("time")))
