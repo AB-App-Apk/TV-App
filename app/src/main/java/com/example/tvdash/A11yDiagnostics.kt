@@ -6,24 +6,94 @@ import android.app.ApplicationExitInfo
 import android.content.Context
 import android.os.Build
 import android.os.Process
+import org.json.JSONArray
+import org.json.JSONObject
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
 /**
- * Read-only evidence for diagnosing why the Accessibility Service will not stay enabled.
- * This reports OS observations; it does not change permissions or attempt recovery.
+ * Read-only system diagnostics plus a small persistent trail of significant runtime events.
+ * It never changes permissions or attempts recovery. Event details are short and contain no PINs.
  */
 object A11yDiagnostics {
     // Android's app-op for the user-controlled "Allow restricted settings" protection.
     private const val RESTRICTED_OP = "android:access_restricted_settings"
+    private const val EVENTS_PREFS = "a11y_diagnostics"
+    private const val EVENTS_KEY = "recent_events"
+    private const val MAX_EVENTS = 10
+    private val eventLock = Any()
 
     fun summary(ctx: Context): String = listOf(
         "Restricted settings app-op: ${restrictedSettings(ctx)}",
         "Install source: ${installSource(ctx)}",
+        "Recent runtime events (chronological):\n${recentEvents(ctx)}",
         "Most recent recorded app process exit:\n${lastProcessExit(ctx)}",
         "Self-enable permission: ${if (AccessGuard.canSelfHeal(ctx)) "granted" else "not granted"}"
     ).joinToString("\n")
+
+    /**
+     * Stores a bounded breadcrumb so the user can report service/listener transitions without logcat.
+     * SharedPreferences.apply() avoids blocking Android's lifecycle callback while writing this tiny record.
+     */
+    fun recordEvent(ctx: Context, event: String, detail: String = "") {
+        try {
+            synchronized(eventLock) {
+                val prefs = ctx.applicationContext.getSharedPreferences(EVENTS_PREFS, Context.MODE_PRIVATE)
+                val old = runCatching {
+                    JSONArray(prefs.getString(EVENTS_KEY, "[]") ?: "[]")
+                }.getOrDefault(JSONArray())
+                val now = System.currentTimeMillis()
+                val last = old.optJSONObject(old.length() - 1)
+                val cleanDetail = detail.replace(Regex("\\s+"), " ").take(120)
+
+                // Avoid filling the short trail with the same rapidly repeating listener error.
+                if (last != null &&
+                    last.optString("event") == event &&
+                    last.optString("detail") == cleanDetail &&
+                    now - last.optLong("time") < 15_000L
+                ) return
+
+                val start = (old.length() - MAX_EVENTS + 1).coerceAtLeast(0)
+                val next = JSONArray()
+                for (i in start until old.length()) {
+                    old.optJSONObject(i)?.let { next.put(it) }
+                }
+                next.put(
+                    JSONObject()
+                        .put("time", now)
+                        .put("pid", Process.myPid())
+                        .put("event", event.take(48))
+                        .put("detail", cleanDetail)
+                )
+                prefs.edit().putString(EVENTS_KEY, next.toString()).apply()
+            }
+        } catch (_: Exception) {
+            // Diagnostics must never disrupt the accessibility or listener service.
+        }
+    }
+
+    private fun recentEvents(ctx: Context): String {
+        return try {
+            val prefs = ctx.applicationContext.getSharedPreferences(EVENTS_PREFS, Context.MODE_PRIVATE)
+            val events = JSONArray(prefs.getString(EVENTS_KEY, "[]") ?: "[]")
+            if (events.length() == 0) return "none recorded yet"
+
+            val formatter = SimpleDateFormat("MM-dd HH:mm:ss", Locale.getDefault())
+            val start = (events.length() - 6).coerceAtLeast(0)
+            (start until events.length()).mapNotNull { i ->
+                events.optJSONObject(i)?.let { event ->
+                    val time = formatter.format(Date(event.optLong("time")))
+                    val pid = event.optInt("pid")
+                    val name = event.optString("event", "unknown")
+                    val detail = event.optString("detail").takeIf { it.isNotBlank() }
+                    "$time pid=$pid $name" + (detail?.let { " — $it" } ?: "")
+                }
+            }.joinToString("\n").ifBlank { "none recorded yet" }
+        } catch (e: Exception) {
+            "unavailable (${e.javaClass.simpleName})"
+        }
+    }
 
     private fun restrictedSettings(ctx: Context): String {
         // Android's restricted-settings protection was introduced in Android 13.
