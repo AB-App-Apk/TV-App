@@ -120,6 +120,7 @@ class RemoteService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        A11yDiagnostics.recordEvent(this, "listener-start-request")
         Log.i(TAG, "lifecycle=onStartCommand pid=" + android.os.Process.myPid() + " startId=" + startId + " elapsedMs=" + android.os.SystemClock.elapsedRealtime())
         getSystemService(NotificationManager::class.java)
             .createNotificationChannel(NotificationChannel("remote", "Phone remote", NotificationManager.IMPORTANCE_MIN))
@@ -139,6 +140,7 @@ class RemoteService : Service() {
     }
 
     override fun onDestroy() {
+        A11yDiagnostics.recordEvent(this, "listener-destroyed")
         Log.w(TAG, "lifecycle=onDestroy pid=" + android.os.Process.myPid() + " elapsedMs=" + android.os.SystemClock.elapsedRealtime())
         running = false
         main.removeCallbacks(healthTick)
@@ -161,6 +163,7 @@ class RemoteService : Service() {
         var wait = 500L
         while (running) {
             try {
+                A11yDiagnostics.recordEvent(this, "tls-starting")
                 Log.i(TAG, "TLS startup beginning pid=" + android.os.Process.myPid() + " elapsedMs=" + android.os.SystemClock.elapsedRealtime())
                 val tls = TvTlsStore.serverContext(this)
                 (tls.serverSocketFactory.createServerSocket() as SSLServerSocket).use { s ->
@@ -169,6 +172,7 @@ class RemoteService : Service() {
                     s.bind(InetSocketAddress(PORT))
                     server = s
                     wait = 500L
+                    A11yDiagnostics.recordEvent(this, "tls-listener-up", "port $PORT")
                     Log.i(TAG, "HTTPS listener is up on port $PORT pid=" + android.os.Process.myPid() + " elapsedMs=" + android.os.SystemClock.elapsedRealtime())
                     while (running) {
                         val c = s.accept()
@@ -181,6 +185,7 @@ class RemoteService : Service() {
                 }
             } catch (e: Exception) {
                 if (!running) break
+                A11yDiagnostics.recordEvent(this, "tls-listener-error", e.javaClass.simpleName + ": " + (e.message ?: "no message"))
                 Log.e(TAG, "TLS/listener startup or accept loop failed; restarting pid=" + android.os.Process.myPid() + " elapsedMs=" + android.os.SystemClock.elapsedRealtime(), e)
                 try { Thread.sleep(wait) } catch (ie: InterruptedException) { break }
                 wait = (wait * 2).coerceAtMost(8_000L)
