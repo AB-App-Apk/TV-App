@@ -193,7 +193,7 @@ class RemoteService : Service() {
         }
     }
 
-    /** Confirms the port answers on this device and reopens it if not; also repairs a dropped accessibility service. */
+    /** Confirms the port answers on this device and reopens it if not. */
     private fun checkHealth() {
         val alive = try {
             // Only the TCP connect is checked, so no TLS handshake is needed here.
@@ -205,7 +205,6 @@ class RemoteService : Service() {
             Log.w(TAG, "listener is not answering; reopening it")
             runCatching { server?.close() } // the accept loop sees the error and binds again
         }
-        if (AccessGuard.state(this) == AccessState.DROPPED) AccessGuard.reEnable(this)
     }
 
     private fun watchNetwork() {
