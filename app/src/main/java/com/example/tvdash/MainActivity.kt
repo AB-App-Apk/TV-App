@@ -96,7 +96,25 @@ class MainActivity : ComponentActivity() {
             }
 
             PackageInstaller.STATUS_PENDING_USER_ACTION -> {
-                Log.i(TAG, "Package installation requires user confirmation.")
+                val confirmationIntent = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                    callback.getParcelableExtra(Intent.EXTRA_INTENT, Intent::class.java)
+                } else {
+                    @Suppress("DEPRECATION")
+                    callback.getParcelableExtra(Intent.EXTRA_INTENT) as? Intent
+                }
+
+                if (confirmationIntent == null) {
+                    Log.e(TAG, "PackageInstaller requested user confirmation but supplied no confirmation intent.")
+                } else {
+                    try {
+                        startActivity(confirmationIntent)
+                        Log.i(TAG, "Launched PackageInstaller user-confirmation UI.")
+                    } catch (exception: SecurityException) {
+                        Log.e(TAG, "Permission denied launching PackageInstaller confirmation UI.", exception)
+                    } catch (exception: android.content.ActivityNotFoundException) {
+                        Log.e(TAG, "PackageInstaller confirmation UI could not be launched.", exception)
+                    }
+                }
             }
 
             PackageInstaller.STATUS_FAILURE -> {
