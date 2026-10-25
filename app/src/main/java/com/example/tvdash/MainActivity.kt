@@ -164,15 +164,6 @@ fun HomeScreen() {
     val access = AccessGuard.state(ctx)
     LaunchedEffect(reload) { apps = withContext(Dispatchers.IO) { loadApps(ctx) } }
 
-    // Refresh the diagnostic snapshot while visible; Settings changes can happen while this Activity is paused.
-    val a11yFacts by produceState("", access, reload) {
-        while (true) {
-            value = if (access == AccessState.OK) "" else
-                withContext(Dispatchers.IO) { A11yDiagnostics.summary(ctx) }
-            delay(2_000)
-        }
-    }
-
     val status by produceState(readStatus(ctx)) {
         while (true) { delay(1000); value = readStatus(ctx) }
     }
@@ -198,7 +189,7 @@ fun HomeScreen() {
             DashCard(
                 "Remote control",
                 when (access) { AccessState.CONNECTING -> "Starting..."; AccessState.DROPPED -> "Paused"; else -> "Off" },
-                if (a11yFacts.isEmpty()) baseMessage else "$baseMessage\n\n$a11yFacts",
+                baseMessage,
                 Modifier.fillMaxWidth()
             ) { AccessGuard.recover(ctx) }
         }
