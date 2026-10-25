@@ -70,7 +70,7 @@ object AccessGuard {
 
     /**
      * Turns the service off and on again in Settings, which makes Android rebind it even after a kill or crash.
-     * Works only when canSelfHeal() is true. Automatic attempts are spaced a minute apart; [force] is for a user tap.
+     * Works only when canSelfHeal() is true. Calls without [force] are spaced a minute apart; [force] is reserved for explicit user-triggered recovery.
      */
     fun reEnable(ctx: Context, force: Boolean = false): Boolean {
         if (!canSelfHeal(ctx)) return false
