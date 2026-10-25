@@ -9,6 +9,8 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageInstaller
 import android.util.Log
+import android.content.pm.PackageInstaller
+import android.util.Log
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
 import android.os.Bundle
@@ -43,6 +45,11 @@ import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
 
 class MainActivity : ComponentActivity() {
+    private companion object {
+        const val TAG = "MainActivity"
+        const val ACTION_INSTALL_COMPLETE = "com.example.tvdash.INSTALL_COMPLETE"
+    }
+
     private companion object {
         const val TAG = "MainActivity"
         const val ACTION_INSTALL_COMPLETE = "com.example.tvdash.INSTALL_COMPLETE"
