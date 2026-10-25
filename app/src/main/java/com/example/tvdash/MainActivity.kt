@@ -46,7 +46,6 @@ class MainActivity : ComponentActivity() {
     private companion object {
         const val TAG = "MainActivity"
         const val ACTION_INSTALL_COMPLETE = "com.example.tvdash.INSTALL_COMPLETE"
-        const val ACTION_UPDATER_RESULT = "com.example.updater.RESULT"
     }
 
     /** Lets TV Dash accept the phone's Bluetooth link. Android 12+ shows this as "Nearby devices". */
@@ -62,7 +61,8 @@ class MainActivity : ComponentActivity() {
             MaterialTheme(colorScheme = darkColorScheme()) { HomeScreen() }
         }
 
-        // A status PendingIntent can create this activity when no instance is alive.
+        // Retain compatibility with direct status intents, but never launch nested intents
+        // from this exported launcher activity. The session installer uses a private receiver.
         handleInstallCompletion(intent)
     }
 
@@ -73,13 +73,13 @@ class MainActivity : ComponentActivity() {
     }
 
     /**
-     * Handles only this app's explicit installer callback action. Logging is deliberately
-     * lightweight so the Compose/Leanback UI is not blocked by installation status handling.
-     * The active updater's private BroadcastReceiver remains responsible for user-confirmation
-     * intents; this exported activity does not launch arbitrary nested intents from untrusted callers.
+     * Handles legacy direct installer status intents using bounded, non-blocking logging.
+     * User-confirmation intents are handled only by the non-exported InstallStatusReceiver:
+     * this exported launcher activity must never trust and launch a nested intent supplied
+     * through an externally forgeable activity action.
      */
     private fun handleInstallCompletion(callback: Intent) {
-        if (callback.action != ACTION_INSTALL_COMPLETE && callback.action != ACTION_UPDATER_RESULT) return
+        if (callback.action != ACTION_INSTALL_COMPLETE) return
 
         val status = callback.getIntExtra(
             PackageInstaller.EXTRA_STATUS,
@@ -96,25 +96,10 @@ class MainActivity : ComponentActivity() {
             }
 
             PackageInstaller.STATUS_PENDING_USER_ACTION -> {
-                val confirmationIntent = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                    callback.getParcelableExtra(Intent.EXTRA_INTENT, Intent::class.java)
-                } else {
-                    @Suppress("DEPRECATION")
-                    callback.getParcelableExtra(Intent.EXTRA_INTENT) as? Intent
-                }
-
-                if (confirmationIntent == null) {
-                    Log.e(TAG, "PackageInstaller requested user confirmation but supplied no confirmation intent.")
-                } else {
-                    try {
-                        startActivity(confirmationIntent)
-                        Log.i(TAG, "Launched PackageInstaller user-confirmation UI.")
-                    } catch (exception: SecurityException) {
-                        Log.e(TAG, "Permission denied launching PackageInstaller confirmation UI.", exception)
-                    } catch (exception: android.content.ActivityNotFoundException) {
-                        Log.e(TAG, "PackageInstaller confirmation UI could not be launched.", exception)
-                    }
-                }
+                Log.i(
+                    TAG,
+                    "Package installation requires user confirmation; the private receiver handles the confirmation UI."
+                )
             }
 
             PackageInstaller.STATUS_FAILURE -> {
