@@ -33,6 +33,38 @@ jobs:
         with:
           gradle-version: "8.9"
 
+      - name: Diagnose JDK, Gradle, and Android SDK
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "JAVA_HOME=${JAVA_HOME:-<unset>}"
+          java -version
+          gradle --version
+          SDK_ROOT="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-}}"
+          if [[ -z "$SDK_ROOT" ]]; then
+            echo "::error::ANDROID_SDK_ROOT and ANDROID_HOME are both unset."
+            exit 1
+          fi
+          echo "Android SDK root: $SDK_ROOT"
+          test -d "$SDK_ROOT/platforms" || {
+            echo "::error::Android SDK platforms directory missing: $SDK_ROOT/platforms"
+            exit 1
+          }
+          find "$SDK_ROOT/platforms" -mindepth 1 -maxdepth 1 -type d -printf 'Installed platform: %f\n' | sort
+          test -d "$SDK_ROOT/build-tools" || {
+            echo "::error::Android SDK build-tools directory missing: $SDK_ROOT/build-tools"
+            exit 1
+          }
+          find "$SDK_ROOT/build-tools" -mindepth 1 -maxdepth 1 -type d -printf 'Installed build-tools: %f\n' | sort
+
+      - name: Verify Gradle tasks and run unsigned CI preflight
+        shell: bash
+        run: |
+          set -euo pipefail
+          gradle tasks --all --no-daemon
+          gradle :app:testDebugUnitTest :remote:testDebugUnitTest \
+            :app:assembleDebug :remote:assembleDebug --no-daemon --stacktrace
+
       - name: Validate signing secrets and prepare keystore
         shell: bash
         env:
