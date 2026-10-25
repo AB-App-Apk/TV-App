@@ -15,9 +15,9 @@ import java.io.IOException
 /**
  * Installs an APK using PackageInstaller sessions.
  *
- * PackageInstaller status callbacks are delivered to MainActivity through the explicit
- * com.example.tvdash.INSTALL_COMPLETE intent action. MainActivity must remain registered
- * for that action and handle the standard PackageInstaller status extras.
+ * PackageInstaller status callbacks are delivered to the non-exported InstallStatusReceiver
+ * through an explicit mutable PendingIntent so confirmation intents are not trusted through
+ * the exported TV launcher activity.
  */
 object UnrestrictedInstaller {
 
@@ -105,7 +105,7 @@ object UnrestrictedInstaller {
                 }
             }
 
-            val callbackIntent = Intent(appContext, MainActivity::class.java).apply {
+            val callbackIntent = Intent(appContext, InstallStatusReceiver::class.java).apply {
                 action = INSTALL_COMPLETE_ACTION
                 data = Uri.parse("tvdash://installer-status/$sessionId")
                 putExtra(PackageInstaller.EXTRA_SESSION_ID, sessionId)
@@ -120,7 +120,7 @@ object UnrestrictedInstaller {
                     0
                 }
 
-            val statusCallback = PendingIntent.getActivity(
+            val statusCallback = PendingIntent.getBroadcast(
                 appContext,
                 sessionId,
                 callbackIntent,
