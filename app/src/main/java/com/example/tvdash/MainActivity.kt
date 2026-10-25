@@ -7,6 +7,8 @@ import android.os.Build
 import androidx.activity.result.contract.ActivityResultContracts
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageInstaller
+import android.util.Log
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
 import android.os.Bundle
@@ -41,6 +43,11 @@ import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
 
 class MainActivity : ComponentActivity() {
+    private companion object {
+        const val TAG = "MainActivity"
+        const val ACTION_INSTALL_COMPLETE = "com.example.tvdash.INSTALL_COMPLETE"
+    }
+
     /** Lets TV Dash accept the phone's Bluetooth link. Android 12+ shows this as "Nearby devices". */
     private val askBluetooth = registerForActivityResult(ActivityResultContracts.RequestPermission()) { }
 
@@ -52,6 +59,76 @@ class MainActivity : ComponentActivity() {
         ) askBluetooth.launch(Manifest.permission.BLUETOOTH_CONNECT)
         setContent {
             MaterialTheme(colorScheme = darkColorScheme()) { HomeScreen() }
+        }
+
+        // A status PendingIntent can create this activity when no instance is alive.
+        handleInstallCompletion(intent)
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        handleInstallCompletion(intent)
+    }
+
+    /**
+     * Handles only this app's explicit installer callback action. Logging is deliberately
+     * lightweight so the Compose/Leanback UI is not blocked by installation status handling.
+     * The active updater's private BroadcastReceiver remains responsible for user-confirmation
+     * intents; this exported activity does not launch arbitrary nested intents from untrusted callers.
+     */
+    private fun handleInstallCompletion(callback: Intent) {
+        if (callback.action != ACTION_INSTALL_COMPLETE) return
+
+        val status = callback.getIntExtra(
+            PackageInstaller.EXTRA_STATUS,
+            Int.MIN_VALUE
+        )
+        val message = callback.getStringExtra(PackageInstaller.EXTRA_STATUS_MESSAGE)
+            ?.takeIf { it.isNotBlank() }
+            ?.take(512)
+            ?: "No status message supplied by PackageInstaller."
+
+        when (status) {
+            PackageInstaller.STATUS_SUCCESS -> {
+                Log.i(TAG, "Package installation completed successfully.")
+            }
+
+            PackageInstaller.STATUS_PENDING_USER_ACTION -> {
+                Log.i(TAG, "Package installation requires user confirmation.")
+            }
+
+            PackageInstaller.STATUS_FAILURE -> {
+                Log.e(TAG, "Package installation failed (status=$status): $message")
+            }
+
+            PackageInstaller.STATUS_FAILURE_ABORTED -> {
+                Log.w(TAG, "Package installation was aborted (status=$status): $message")
+            }
+
+            PackageInstaller.STATUS_FAILURE_BLOCKED -> {
+                Log.e(TAG, "Package installation was blocked (status=$status): $message")
+            }
+
+            PackageInstaller.STATUS_FAILURE_CONFLICT -> {
+                Log.e(TAG, "Package installation conflicted with an installed package (status=$status): $message")
+            }
+
+            PackageInstaller.STATUS_FAILURE_INCOMPATIBLE -> {
+                Log.e(TAG, "Package is incompatible with this device (status=$status): $message")
+            }
+
+            PackageInstaller.STATUS_FAILURE_INVALID -> {
+                Log.e(TAG, "PackageInstaller rejected the package (status=$status): $message")
+            }
+
+            PackageInstaller.STATUS_FAILURE_STORAGE -> {
+                Log.e(TAG, "Insufficient storage for package installation (status=$status): $message")
+            }
+
+            else -> {
+                Log.w(TAG, "PackageInstaller returned status=$status: $message")
+            }
         }
     }
 
