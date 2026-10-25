@@ -1,0 +1,161 @@
+name: Tagged Android TV Production Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build and Verify Signed APKs
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Check out tagged source
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Set up Zulu JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: zulu
+          java-version: "17"
+          cache: gradle
+
+      - name: Set up Gradle with dependency and build caching
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.9"
+
+      - name: Validate signing secrets and prepare keystore
+        shell: bash
+        env:
+          ANDROID_SIGNING_KEY_BASE64: ${{ secrets.ANDROID_SIGNING_KEY_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          test -n "$ANDROID_SIGNING_KEY_BASE64" || {
+            echo "::error::Missing repository secret ANDROID_SIGNING_KEY_BASE64"
+            exit 1
+          }
+          test -n "$ANDROID_KEYSTORE_PASSWORD" || {
+            echo "::error::Missing repository secret ANDROID_KEYSTORE_PASSWORD"
+            exit 1
+          }
+          test -n "$ANDROID_KEY_ALIAS" || {
+            echo "::error::Missing repository secret ANDROID_KEY_ALIAS"
+            exit 1
+          }
+          test -n "$ANDROID_KEY_PASSWORD" || {
+            echo "::error::Missing repository secret ANDROID_KEY_PASSWORD"
+            exit 1
+          }
+
+          printf '%s' "$ANDROID_SIGNING_KEY_BASE64" | base64 --decode > release.keystore
+          test -s release.keystore
+          chmod 600 release.keystore
+
+          if ! keytool -list -keystore release.keystore \
+              -storepass "$ANDROID_KEYSTORE_PASSWORD" \
+              -alias "$ANDROID_KEY_ALIAS" >/dev/null 2>&1; then
+            echo "::error::The signing keystore, store password, or alias is invalid."
+            exit 1
+          fi
+
+      - name: Build signed release APKs
+        shell: bash
+        env:
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          BUILD_NUMBER: ${{ github.run_number }}
+        run: |
+          set -euo pipefail
+          gradle :app:assembleRelease :remote:assembleRelease \
+            -PbuildNumber="$BUILD_NUMBER" --no-daemon --stacktrace
+
+      - name: Verify APK outputs and signatures
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          APP_APK="app/build/outputs/apk/release/app-release.apk"
+          REMOTE_APK="remote/build/outputs/apk/release/remote-release.apk"
+
+          test -s "$APP_APK" || {
+            echo "::error::TV Dash release APK was not generated: $APP_APK"
+            exit 1
+          }
+          test -s "$REMOTE_APK" || {
+            echo "::error::TV Remote release APK was not generated: $REMOTE_APK"
+            exit 1
+          }
+
+          SDK_ROOT="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-/usr/local/lib/android/sdk}}"
+          APKSIGNER="$(find "$SDK_ROOT/build-tools" -type f -name apksigner -print 2>/dev/null | sort -V | tail -n 1)"
+          test -n "$APKSIGNER" || {
+            echo "::error::Android apksigner was not found under $SDK_ROOT/build-tools"
+            exit 1
+          }
+
+          "$APKSIGNER" verify --verbose "$APP_APK"
+          "$APKSIGNER" verify --verbose "$REMOTE_APK"
+
+          mkdir -p dist
+          cp "$APP_APK" dist/TvDash.apk
+          cp "$REMOTE_APK" dist/TvRemote.apk
+          printf '%s' "${{ github.run_number }}" > dist/version.txt
+
+          test -s dist/TvDash.apk
+          test -s dist/TvRemote.apk
+          test -s dist/version.txt
+
+      - name: Remove signing keystore from runner
+        if: always()
+        run: rm -f release.keystore
+
+      - name: Upload verified release assets
+        uses: actions/upload-artifact@v4
+        with:
+          name: tagged-release-apks
+          path: |
+            dist/TvDash.apk
+            dist/TvRemote.apk
+            dist/version.txt
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    name: Publish GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download verified APK assets
+        uses: actions/download-artifact@v4
+        with:
+          name: tagged-release-apks
+          path: dist
+
+      - name: Create release and upload APKs
+        uses: softprops/action-gh-release@v2
+        with:
+          name: "TV Dash ${{ github.ref_name }}"
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+          files: |
+            dist/TvDash.apk
+            dist/TvRemote.apk
+            dist/version.txt
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
