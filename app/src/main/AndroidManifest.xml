@@ -49,10 +49,6 @@
                 <category android:name="android.intent.category.HOME" />
                 <category android:name="android.intent.category.DEFAULT" />
             </intent-filter>
-            <intent-filter>
-                <action android:name="com.example.tvdash.INSTALL_COMPLETE" />
-                <category android:name="android.intent.category.DEFAULT" />
-            </intent-filter>
         </activity>
 
         <receiver
