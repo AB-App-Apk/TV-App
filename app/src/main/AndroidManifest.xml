@@ -53,11 +53,15 @@
                 <action android:name="com.example.tvdash.INSTALL_COMPLETE" />
                 <category android:name="android.intent.category.DEFAULT" />
             </intent-filter>
-            <intent-filter>
-                <action android:name="com.example.updater.RESULT" />
-                <category android:name="android.intent.category.DEFAULT" />
-            </intent-filter>
         </activity>
+
+        <receiver
+            android:name=".InstallStatusReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="com.example.tvdash.INSTALL_COMPLETE" />
+            </intent-filter>
+        </receiver>
 
         <service
             android:name=".RemoteService"
