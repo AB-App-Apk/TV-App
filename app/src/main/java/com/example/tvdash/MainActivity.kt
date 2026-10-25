@@ -46,6 +46,7 @@ class MainActivity : ComponentActivity() {
     private companion object {
         const val TAG = "MainActivity"
         const val ACTION_INSTALL_COMPLETE = "com.example.tvdash.INSTALL_COMPLETE"
+        const val ACTION_UPDATER_RESULT = "com.example.updater.RESULT"
     }
 
     /** Lets TV Dash accept the phone's Bluetooth link. Android 12+ shows this as "Nearby devices". */
@@ -78,7 +79,7 @@ class MainActivity : ComponentActivity() {
      * intents; this exported activity does not launch arbitrary nested intents from untrusted callers.
      */
     private fun handleInstallCompletion(callback: Intent) {
-        if (callback.action != ACTION_INSTALL_COMPLETE) return
+        if (callback.action != ACTION_INSTALL_COMPLETE && callback.action != ACTION_UPDATER_RESULT) return
 
         val status = callback.getIntExtra(
             PackageInstaller.EXTRA_STATUS,
