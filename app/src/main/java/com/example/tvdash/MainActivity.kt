@@ -50,6 +50,8 @@ class MainActivity : ComponentActivity() {
         const val ACTION_INSTALL_COMPLETE = "com.example.tvdash.INSTALL_COMPLETE"
     }
 
+private var restrictedSettingsPrompted = false
+
     /** Lets TV Dash accept the phone's Bluetooth link. Android 12+ shows this as "Nearby devices". */
     private val askBluetooth = registerForActivityResult(ActivityResultContracts.RequestPermission()) { }
 
@@ -80,30 +82,28 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun checkAndUnlockAccessibilityProfile() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            val appOps = getSystemService(Context.APP_OPS_SERVICE) as? AppOpsManager
-            if (appOps == null) {
-                Log.w(TAG, "AppOpsManager system service is unavailable.")
-                return
-            }
-            
-            try {
-                val mode = appOps.noteOpNoThrow(
-                    "android:access_restricted_settings", 
-                    android.os.Process.myUid(), 
-                    packageName
-                )
-                
-                if (mode != AppOpsManager.MODE_ALLOWED) {
-                    Log.i(TAG, "Restricted settings profile detected. Redirecting user.")
-                    openHiddenSystemSettings()
-                }
-            } catch (e: SecurityException) {
-                Log.e(TAG, "SecurityException thrown while reading app-op profile state", e)
-                openHiddenSystemSettings()
-            }
-        }
+    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU ||
+        restrictedSettingsPrompted
+    ) return
+
+    val appOps = getSystemService(AppOpsManager::class.java) ?: return
+
+    val mode = try {
+        appOps.unsafeCheckOpNoThrow(
+            "android:access_restricted_settings",
+            android.os.Process.myUid(),
+            packageName
+        )
+    } catch (e: Exception) {
+        Log.w(TAG, "Unable to check restricted-settings state", e)
+        return
     }
+
+    if (mode != AppOpsManager.MODE_ALLOWED) {
+        restrictedSettingsPrompted = true
+        openHiddenSystemSettings()
+    }
+}
 
     private fun openHiddenSystemSettings() {
         try {
