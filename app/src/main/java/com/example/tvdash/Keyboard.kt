@@ -61,11 +61,50 @@ class RemoteKeyboardService : InputMethodService() {
 
     /** The input connection must be used on the main thread; the HTTP server calls from its own threads. */
     private fun onMain(block: () -> Boolean): Boolean {
-        if (Looper.myLooper() == Looper.getMainLooper()) return block()
-        val result = AtomicBoolean(false)
-        val latch = CountDownLatch(1)
-        main.post { try { result.set(block()) } finally { latch.countDown() } }
-        latch.await(1500, TimeUnit.MILLISECONDS)
+    if (Looper.myLooper() == Looper.getMainLooper()) {
+        return block()
+    }
+
+    val gate = Any()
+    var taskState = 0 // 0 = queued, 1 = running, 2 = cancelled
+    val result = AtomicBoolean(false)
+    val latch = CountDownLatch(1)
+
+    val task = Runnable {
+        val shouldRun = synchronized(gate) {
+            if (taskState == 2) {
+                false
+            } else {
+                taskState = 1
+                true
+            }
+        }
+
+        if (shouldRun) {
+            try {
+                result.set(block())
+            } finally {
+                latch.countDown()
+            }
+        } else {
+            latch.countDown()
+        }
+    }
+
+    if (!main.post(task)) return false
+
+    if (latch.await(1500, TimeUnit.MILLISECONDS)) {
         return result.get()
+    }
+
+    return synchronized(gate) {
+        if (taskState == 0) {
+            taskState = 2
+            main.removeCallbacks(task)
+            false
+        } else {
+            // Already running: suppress a second typing route.
+            true
+        }
     }
 }
