@@ -89,7 +89,7 @@ private var restrictedSettingsPrompted = false
     val appOps = getSystemService(AppOpsManager::class.java) ?: return
 
     val mode = try {
-        appOps.unsafeCheckOpNoThrow(
+        appOps.noteOpNoThrow(
             "android:access_restricted_settings",
             android.os.Process.myUid(),
             packageName
