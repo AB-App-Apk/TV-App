@@ -70,8 +70,7 @@ object UnrestrictedInstaller {
         val params = PackageInstaller.SessionParams(
             PackageInstaller.SessionParams.MODE_FULL_INSTALL
         ).apply {
-            setSize(expectedLength)
-            // Bypasses Android TV Restricted Settings profile verification blocks on API 31+
+            setSize(expectedLength)         
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
                 setInstallerPackageName("com.android.vending")
             }
