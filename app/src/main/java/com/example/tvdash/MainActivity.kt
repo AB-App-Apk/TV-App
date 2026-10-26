@@ -89,7 +89,7 @@ class MainActivity : ComponentActivity() {
             
             try {
                 val mode = appOps.noteOpNoThrow(
-                    "android:op_unrestricted_settings", 
+                    "android:access_restricted_settings", 
                     android.os.Process.myUid(), 
                     packageName
                 )
