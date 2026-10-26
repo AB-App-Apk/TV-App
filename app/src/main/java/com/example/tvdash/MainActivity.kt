@@ -1,5 +1,7 @@
 package com.example.tvdash
 
+import android.app.AppOpsManager
+import android.net.Uri
 import android.content.ComponentCallbacks2
 import android.Manifest
 import android.content.pm.PackageManager
@@ -70,6 +72,49 @@ class MainActivity : ComponentActivity() {
         super.onNewIntent(intent)
         setIntent(intent)
         handleInstallCompletion(intent)
+    }
+
+    override fun onResume() {
+        super.onResume()
+        checkAndUnlockAccessibilityProfile()
+    }
+
+    private fun checkAndUnlockAccessibilityProfile() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            val appOps = getSystemService(Context.APP_OPS_SERVICE) as? AppOpsManager
+            if (appOps == null) {
+                Log.w(TAG, "AppOpsManager system service is unavailable.")
+                return
+            }
+            
+            try {
+                val mode = appOps.noteOpNoThrow(
+                    "android:op_unrestricted_settings", 
+                    android.os.Process.myUid(), 
+                    packageName
+                )
+                
+                if (mode != AppOpsManager.MODE_ALLOWED) {
+                    Log.i(TAG, "Restricted settings profile detected. Redirecting user.")
+                    openHiddenSystemSettings()
+                }
+            } catch (e: SecurityException) {
+                Log.e(TAG, "SecurityException thrown while reading app-op profile state", e)
+                openHiddenSystemSettings()
+            }
+        }
+    }
+
+    private fun openHiddenSystemSettings() {
+        try {
+            val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+                data = Uri.fromParts("package", packageName, null)
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            startActivity(intent)
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to launch application details settings intent", e)
+        }
     }
 
     /**
