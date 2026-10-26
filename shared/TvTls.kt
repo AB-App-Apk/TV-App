@@ -61,15 +61,26 @@ object TvTls {
     fun fingerprintOf(der: ByteArray): String = hex(MessageDigest.getInstance("SHA-256").digest(der))
 
     /** Lowercase hex with everything but letters and digits removed, so "A1:B2 c3" and "a1b2c3" compare equal. */
-    fun normalize(fingerprint: String): String = fingerprint.filter { it.isLetterOrDigit() }.lowercase()
+    fun normalize(fingerprint: String): String =
+    fingerprint
+        .filterNot { it.isWhitespace() || it == ':' || it == '-' }
+        .lowercase()
 
-    /** True when both are full fingerprints and equal. The comparison takes the same time wherever they differ. */
-    fun sameFingerprint(a: String, b: String): Boolean {
-        val x = normalize(a)
-        val y = normalize(b)
-        return x.length == FINGERPRINT_HEX_CHARS && y.length == FINGERPRINT_HEX_CHARS &&
-            MessageDigest.isEqual(x.toByteArray(Charsets.US_ASCII), y.toByteArray(Charsets.US_ASCII))
-    }
+private fun isFullFingerprint(value: String): Boolean =
+    value.length == FINGERPRINT_HEX_CHARS &&
+        value.all { it in '0'..'9' || it in 'a'..'f' }
+
+fun sameFingerprint(a: String, b: String): Boolean {
+    val x = normalize(a)
+    val y = normalize(b)
+
+    return isFullFingerprint(x) &&
+        isFullFingerprint(y) &&
+        MessageDigest.isEqual(
+            x.toByteArray(Charsets.US_ASCII),
+            y.toByteArray(Charsets.US_ASCII)
+        )
+}
 
     /** The first [CODE_HEX_CHARS] characters in groups of four, upper case: what the person compares. */
     fun shortCode(fingerprint: String): String =
