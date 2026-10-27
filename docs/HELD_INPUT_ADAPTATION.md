@@ -16,6 +16,7 @@
 4. TV Dash keeps active network holds in a concurrent map and schedules an automatic UP when its four-second safety lease expires.
 5. While the touch remains down, the phone renews the lease every second; renewal refreshes the TV watchdog without sending a second DOWN.
 6. A user UP, gesture cancellation, phone/service interruption, or the watchdog releases the hold. Duplicate UP requests are idempotent.
+7. The phone's input gate stays reserved from before DOWN until the matching UP/release path finishes. Ordinary button commands and text payloads wait behind a real hold, so they cannot send a conflicting HID report or a competing TV Dash media tap. One-shot fallback taps release the gate before using the ordinary command path.
 
 ## Platform limitation
 
@@ -38,6 +39,7 @@ The phone's existing Bluetooth setup still requests its required Nearby devices 
 - [ ] Drop the network after a media DOWN: TV sends UP no later than 4 seconds after the last successful lease renewal.
 - [ ] Send duplicate UP: no crash and no second release.
 - [ ] Send UP with a mismatched key ID: TV rejects it.
+- [ ] While holding each key, press another remote button and type text: the extra input must wait until the held key is released, then continue without releasing the held report early.
 - [ ] Disconnect Bluetooth while a key is held: Android releases the HID device state and the app clears its hold records.
 - [ ] Test Wi-Fi and RFCOMM paths separately; the phone's PIN remains in the existing authenticated header.
 - [ ] Confirm the existing accessibility setup and Nearby devices permission flow still work.

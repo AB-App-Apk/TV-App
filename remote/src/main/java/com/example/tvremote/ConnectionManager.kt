@@ -198,11 +198,16 @@ class ConnectionManager(
     private val sendLock = Mutex()
     private val buffer = ArrayDeque<Pending>()
 
-    private enum class HeldRoad { KEYBOARD, DASH, TAP }
+    private enum class HeldRoad { KEYBOARD, DASH, UNCERTAIN_DASH, TAP }
 
     private val heldRoutes = ConcurrentHashMap<String, HeldRoad>()
     private val heldTimeouts = ConcurrentHashMap<String, Job>()
     private val heldRenewals = ConcurrentHashMap<String, Job>()
+
+    /** Ordinary commands and typing wait behind a real held-key session. */
+    private val inputGate = HeldInputGate()
+    private val heldLifecycleLock = Mutex()
+    private val heldInputLease = java.util.concurrent.atomic.AtomicReference<HeldInputGate.HoldLease?>(null)
 
     /** Typing requests are handled one at a time, in order. Everything below that touches the session holds this lock. */
     private val keyboardLock = Mutex()
@@ -268,11 +273,13 @@ class ConnectionManager(
         heldKeyById.clear()
         heldTimeouts.clear()
         heldRenewals.clear()
+        // Close the HID route and publish the disconnected state before waking commands waiting on the input gate.
         keyboardLink.release()
         dashUp = false
         keysUp = false
         _state.value = RemoteConnectionState.Disconnected
         _hint.value = ""
+        heldInputLease.getAndSet(null)?.release()
         scope.launch { sendLock.withLock { buffer.clear() } }
         scope.launch {
             keyboardLock.withLock {
@@ -299,56 +306,128 @@ class ConnectionManager(
      * Starts a real key-down report on Bluetooth HID when possible. The TV Dash endpoint is only a fallback
      * for media keys, because AccessibilityService cannot inject arbitrary held Back/OK KeyEvents.
      */
-    suspend fun beginHeldInput(holdId: String, key: HeldRemoteKey): Boolean {
-        if (!HeldInputProtocol.isValidHoldId(holdId)) return false
+    suspend fun beginHeldInput(holdId: String, key: HeldRemoteKey): Boolean =
+        heldLifecycleLock.withLock {
+            beginHeldInputLocked(holdId, key)
+        }
+
+    private suspend fun beginHeldInputLocked(holdId: String, key: HeldRemoteKey): Boolean {
+        if (!started || !HeldInputProtocol.isValidHoldId(holdId)) return false
         if (heldRoutes.containsKey(holdId)) return true
         if (heldRoutes.isNotEmpty()) return false
 
-        if (keysUp) {
-            try {
-                if (keyboardLink.startHeldInput(holdId, key)) {
-                    trackHeld(holdId, HeldRoad.KEYBOARD)
+        // Reserve the input stream before sending DOWN. Every ordinary key and text request uses this same gate.
+        val lease = inputGate.acquireHold()
+        heldInputLease.getAndSet(lease)?.release()
+        var keepGate = false
+        try {
+            if (!started) return false
+            if (keysUp) {
+                try {
+                    if (keyboardLink.startHeldInput(holdId, key)) {
+                        if (!started) {
+                            keyboardLink.endHeldInput(holdId)
+                            return false
+                        }
+                        trackHeld(holdId, HeldRoad.KEYBOARD)
+                        keepGate = true
+                        if (!started) {
+                            abandonHeldStart(holdId, key, HeldRoad.KEYBOARD, lease)
+                            return false
+                        }
+                        return true
+                    }
+                } catch (e: IOException) {
+                    Log.w(TAG, "Bluetooth held-key start failed: ${e.message}")
+                    setKeys(false)
+                }
+            }
+
+            if (key == HeldRemoteKey.FORWARD || key == HeldRemoteKey.REWIND) {
+                val reply = link.get(HeldInputProtocol.path(holdId, key, HeldAction.DOWN))
+                if (reply is TvReply.Ok && reply.body.trim() == RemoteStatus.OK) {
+                    if (!started) {
+                        link.get(HeldInputProtocol.path(holdId, key, HeldAction.UP))
+                        return false
+                    }
+                    heldKeyById[holdId] = key
+                    trackHeld(holdId, HeldRoad.DASH)
+                    keepGate = true
+                    if (!started) {
+                        abandonHeldStart(holdId, key, HeldRoad.DASH, lease)
+                        return false
+                    }
                     return true
                 }
-            } catch (e: IOException) {
-                Log.w(TAG, "Bluetooth held-key start failed: ${e.message}")
-                setKeys(false)
+                if (reply is TvReply.Unreachable) {
+                    setDash(false)
+                    dashNudge.trySend(Unit)
+                    if (!started) return false
+                    // The DOWN may have reached the TV even if its reply was lost. Keep the gate reserved and
+                    // arrange a best-effort UP; never let another command race a possibly active media hold.
+                    heldKeyById[holdId] = key
+                    trackHeld(holdId, HeldRoad.UNCERTAIN_DASH)
+                    keepGate = true
+                    if (!started) {
+                        abandonHeldStart(holdId, key, HeldRoad.UNCERTAIN_DASH, lease)
+                        return false
+                    }
+                    return false
+                }
+                if (reply is TvReply.Rejected) {
+                    noteDashRejected(reply.http)
+                    return false
+                }
             }
-        }
 
-        if (key == HeldRemoteKey.FORWARD || key == HeldRemoteKey.REWIND) {
-            val reply = link.get(HeldInputProtocol.path(holdId, key, HeldAction.DOWN))
-            if (reply is TvReply.Ok && reply.body.trim() == RemoteStatus.OK) {
-                heldKeyById[holdId] = key
-                trackHeld(holdId, HeldRoad.DASH)
+            // No native hold is available. Release the gate before routing the one-shot tap through normal input.
+            releaseHeldGate(lease)
+            val command = when (key) {
+                HeldRemoteKey.BACK -> RemoteCommand.BACK
+                HeldRemoteKey.OK -> RemoteCommand.OK
+                HeldRemoteKey.FORWARD -> RemoteCommand.FORWARD
+                HeldRemoteKey.REWIND -> RemoteCommand.REWIND
+            }
+            val result = (sendRemoteCommand(command) as? DeliveryResult.Delivered)?.reply
+            if (result == RemoteStatus.OK || result == RemoteStatus.QUEUED) {
+                trackHeld(holdId, HeldRoad.TAP)
                 return true
             }
-            if (reply is TvReply.Unreachable) {
-                setDash(false)
-                dashNudge.trySend(Unit)
-                // The DOWN may have reached the TV even if its reply was lost; do not risk a duplicate press.
-                return false
-            }
-            if (reply is TvReply.Rejected) {
-                noteDashRejected(reply.http)
-                return false
-            }
+            return false
+        } finally {
+            if (!keepGate) releaseHeldGate(lease)
         }
+    }
 
-        // If a native hold is explicitly unsupported, preserve the existing one-shot tap rather than swallowing touch input.
-        // Back and OK use accessibility only for this tap fallback; Fast Forward/Rewind use TV Dash's existing route.
-        val command = when (key) {
-            HeldRemoteKey.BACK -> RemoteCommand.BACK
-            HeldRemoteKey.OK -> RemoteCommand.OK
-            HeldRemoteKey.FORWARD -> RemoteCommand.FORWARD
-            HeldRemoteKey.REWIND -> RemoteCommand.REWIND
+    private fun releaseHeldGate(expected: HeldInputGate.HoldLease? = null) {
+        if (expected == null) {
+            heldInputLease.getAndSet(null)?.release()
+        } else if (heldInputLease.compareAndSet(expected, null)) {
+            expected.release()
         }
-        val result = (sendRemoteCommand(command) as? DeliveryResult.Delivered)?.reply
-        if (result == RemoteStatus.OK || result == RemoteStatus.QUEUED) {
-            trackHeld(holdId, HeldRoad.TAP)
-            return true
+    }
+
+    /** Cleans up a DOWN that raced with stop(), without leaving a stale route or gate lease. */
+    private suspend fun abandonHeldStart(
+        holdId: String,
+        key: HeldRemoteKey,
+        road: HeldRoad,
+        lease: HeldInputGate.HoldLease
+    ) {
+        heldRenewals.remove(holdId)?.cancel()
+        heldTimeouts.remove(holdId)?.cancel()
+        heldRoutes.remove(holdId)
+        heldKeyById.remove(holdId)
+        try {
+            when (road) {
+                HeldRoad.KEYBOARD -> keyboardLink.endHeldInput(holdId)
+                HeldRoad.DASH, HeldRoad.UNCERTAIN_DASH ->
+                    link.get(HeldInputProtocol.path(holdId, key, HeldAction.UP))
+                HeldRoad.TAP -> Unit
+            }
+        } finally {
+            releaseHeldGate(lease)
         }
-        return false
     }
 
     /** Ends the exact route chosen by [beginHeldInput]; duplicate UPs are harmless. */
@@ -357,18 +436,25 @@ class ConnectionManager(
     }
 
     private suspend fun endHeldInput(holdId: String, fromWatchdog: Boolean) {
-        heldRenewals.remove(holdId)?.cancel()
-        val timeout = heldTimeouts.remove(holdId)
-        if (!fromWatchdog) timeout?.cancel()
-        when (heldRoutes.remove(holdId)) {
-            HeldRoad.KEYBOARD -> keyboardLink.endHeldInput(holdId)
-            HeldRoad.DASH -> {
-                // The TV stores the key against this identifier, so an UP uses the matching ID and key.
-                heldKeyById.remove(holdId)?.let { key ->
-                    link.get(HeldInputProtocol.path(holdId, key, HeldAction.UP))
+        heldLifecycleLock.withLock {
+            heldRenewals.remove(holdId)?.cancel()
+            val timeout = heldTimeouts.remove(holdId)
+            if (!fromWatchdog) timeout?.cancel()
+            val road = heldRoutes.remove(holdId) ?: return@withLock
+            try {
+                when (road) {
+                    HeldRoad.KEYBOARD -> keyboardLink.endHeldInput(holdId)
+                    HeldRoad.DASH, HeldRoad.UNCERTAIN_DASH -> {
+                        // Keep ordinary input blocked until the matching TV-side UP request has been attempted.
+                        heldKeyById.remove(holdId)?.let { key ->
+                            link.get(HeldInputProtocol.path(holdId, key, HeldAction.UP))
+                        }
+                    }
+                    HeldRoad.TAP -> Unit
                 }
+            } finally {
+                if (road == HeldRoad.KEYBOARD || road == HeldRoad.DASH || road == HeldRoad.UNCERTAIN_DASH) releaseHeldGate()
             }
-            HeldRoad.TAP, null -> Unit
         }
     }
 
@@ -378,7 +464,7 @@ class ConnectionManager(
 
         // The lease is renewed only while the captured touch remains active. If renewal stops, the independent
         // timeout still releases the phone-side hold; the TV has its own matching four-second network watchdog.
-        if (road == HeldRoad.TAP) return
+        if (road == HeldRoad.TAP || road == HeldRoad.UNCERTAIN_DASH) return
         heldRenewals[holdId] = scope.launch {
             while (isActive && heldRoutes[holdId] == road) {
                 delay(HeldInputProtocol.LEASE_RENEW_INTERVAL_MS)
@@ -415,7 +501,7 @@ class ConnectionManager(
                     false
                 }
             }
-            HeldRoad.TAP -> false
+            HeldRoad.UNCERTAIN_DASH, HeldRoad.TAP -> false
         }
     }
 
@@ -439,16 +525,18 @@ class ConnectionManager(
      * Sends one button press and always returns Delivered with a [RemoteStatus]: OK, UNAVAILABLE, or QUEUED. Nothing
      * is thrown and no error code from the TV is passed on.
      */
-    suspend fun sendRemoteCommand(command: RemoteCommand): DeliveryResult = sendLock.withLock {
-        // Power On with no link at all: nothing is listening, so holding the press for 5 seconds would be pointless.
-        // The phone's own wake-up (infrared, Wake-on-LAN) is all that is left; the screen runs it.
-        if (command == RemoteCommand.POWER_ON && _state.value === RemoteConnectionState.Disconnected) {
-            return@withLock DeliveryResult.Delivered(RemoteStatus.WAKE_NEEDED)
-        }
-        drainBufferLocked() // anything held earlier goes first, so the order of the presses is kept
-        deliver(command) ?: run {
-            hold(command)
-            DeliveryResult.Delivered(RemoteStatus.QUEUED)
+    suspend fun sendRemoteCommand(command: RemoteCommand): DeliveryResult = inputGate.withInput {
+        sendLock.withLock send@{
+            // Power On with no link at all: nothing is listening, so holding the press for 5 seconds would be pointless.
+            // The phone's own wake-up (infrared, Wake-on-LAN) is all that is left; the screen runs it.
+            if (command == RemoteCommand.POWER_ON && _state.value === RemoteConnectionState.Disconnected) {
+                return@send DeliveryResult.Delivered(RemoteStatus.WAKE_NEEDED)
+            }
+            drainBufferLocked() // anything held earlier goes first, so the order of the presses is kept
+            deliver(command) ?: run {
+                hold(command)
+                DeliveryResult.Delivered(RemoteStatus.QUEUED)
+            }
         }
     }
 
@@ -552,8 +640,12 @@ class ConnectionManager(
 
     /** A link came back: send held buttons and held typing. */
     private fun flushSoon() {
-        scope.launch { sendLock.withLock { drainBufferLocked() } }
-        scope.launch { keyboardLock.withLock { drainHeldKeyboardLocked() } }
+        scope.launch {
+            inputGate.withInput { sendLock.withLock { drainBufferLocked() } }
+        }
+        scope.launch {
+            inputGate.withInput { keyboardLock.withLock { drainHeldKeyboardLocked() } }
+        }
     }
 
     // ---------------------------------------------------------------- typing
@@ -565,9 +657,11 @@ class ConnectionManager(
      *
      * Typing always returns Ok with a [RemoteStatus]: OK, PARTIAL, QUEUED or UNAVAILABLE.
      */
-    suspend fun sendKeyboardPayload(path: String): TvReply = keyboardLock.withLock {
-        val payload = parseKeyboardPayload(path) ?: return@withLock postToDash(path)
-        routeKeyboardLocked(path, payload, SystemClock.elapsedRealtime())
+    suspend fun sendKeyboardPayload(path: String): TvReply = inputGate.withInput {
+        keyboardLock.withLock keyboard@{
+            val payload = parseKeyboardPayload(path) ?: return@keyboard postToDash(path)
+            routeKeyboardLocked(path, payload, SystemClock.elapsedRealtime())
+        }
     }
 
     private fun parseKeyboardPayload(path: String): KeyboardPayload? {
