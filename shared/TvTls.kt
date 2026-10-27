@@ -267,4 +267,3 @@ fun sameFingerprint(a: String, b: String): Boolean {
     fun isCertificateProblem(error: Throwable): Boolean =
         generateSequence(error) { it.cause }.any { it is CertificateException }
 }
-}
