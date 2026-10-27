@@ -150,6 +150,7 @@ class RemoteService : Service() {
         runCatching { server?.close() }
         runCatching { btServer?.close() }
         runCatching { btClient?.close() }
+        heldKeyWatchdog.close()
         btPool.shutdownNow()
         pool.shutdownNow()
         super.onDestroy()
@@ -243,6 +244,37 @@ class RemoteService : Service() {
 
     /** Shared by Wi-Fi and Bluetooth, with independent attempt histories for each client. */
     private val pinLimiter = PinAttemptLimiter()
+
+    /** Network-held media keys; unmatched releases are generated after the safety timeout. */
+    private val heldKeyWatchdog = HeldKeyWatchdog(
+        onDown = { key, downTime ->
+            val keyCode = when (key) {
+                com.example.tvlink.HeldRemoteKey.FORWARD -> KeyEvent.KEYCODE_MEDIA_FAST_FORWARD
+                com.example.tvlink.HeldRemoteKey.REWIND -> KeyEvent.KEYCODE_MEDIA_REWIND
+                com.example.tvlink.HeldRemoteKey.BACK,
+                com.example.tvlink.HeldRemoteKey.OK -> null
+            }
+            if (keyCode == null) {
+                "unsupported"
+            } else {
+                val event = KeyEvent(downTime, downTime, KeyEvent.ACTION_DOWN, keyCode, 0)
+                getSystemService(AudioManager::class.java).dispatchMediaKeyEvent(event)
+                "ok"
+            }
+        },
+        onUp = { key, downTime ->
+            val keyCode = when (key) {
+                com.example.tvlink.HeldRemoteKey.FORWARD -> KeyEvent.KEYCODE_MEDIA_FAST_FORWARD
+                com.example.tvlink.HeldRemoteKey.REWIND -> KeyEvent.KEYCODE_MEDIA_REWIND
+                com.example.tvlink.HeldRemoteKey.BACK,
+                com.example.tvlink.HeldRemoteKey.OK -> null
+            }
+            if (keyCode != null) {
+                val event = KeyEvent(downTime, android.os.SystemClock.uptimeMillis(), KeyEvent.ACTION_UP, keyCode, 0)
+                getSystemService(AudioManager::class.java).dispatchMediaKeyEvent(event)
+            }
+        }
+    )
 
     /** One request line in, one answer out. Wi-Fi and Bluetooth keep the same protocol and denial response. */
     private fun answer(line: String, clientKey: String, suppliedPin: String?): Pair<String, String> {
@@ -352,6 +384,16 @@ class RemoteService : Service() {
     }
 
     private fun route(u: Uri): String = when (u.path) {
+        "/hold" -> {
+            val holdId = u.getQueryParameter("id")
+            val key = com.example.tvlink.HeldRemoteKey.fromWire(u.getQueryParameter("key"))
+            val action = com.example.tvlink.HeldAction.fromWire(u.getQueryParameter("action"))
+            if (holdId == null || key == null || action == null) {
+                "bad-hold"
+            } else {
+                heldKeyWatchdog.handle(holdId, key, action)
+            }
+        }
         "/apps" -> JSONArray().also { a ->
             appList().forEach { (n, p) -> a.put(JSONObject().put("n", n).put("p", p)) }
         }.toString()

@@ -58,6 +58,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.example.tvlink.HeldRemoteKey
 import kotlinx.coroutines.delay
 
 private val AmberBanner = Color(0xFFFFB300)
@@ -412,7 +413,14 @@ private fun VolumeRow(viewModel: RemoteViewModel) {
 @Composable
 private fun SystemRow(viewModel: RemoteViewModel) {
     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        RemoteButton(Ico.Back, "Back", Modifier.weight(1f)) { viewModel.onBackClicked() }
+        RemoteButton(
+            Ico.Back,
+            "Back",
+            Modifier.weight(1f).heldRemoteInput(
+                HeldRemoteKey.BACK,
+                viewModel::onHeldInputDown
+            ) { _, holdId -> viewModel.onHeldInputUp(holdId) }
+        ) { viewModel.onBackClicked() }
         RemoteButton(Ico.Home, "Home", Modifier.weight(1f)) { viewModel.onHomeClicked() }
         RemoteButton(Ico.Settings, "Settings", Modifier.weight(1f)) { viewModel.onSettingsClicked() }
         RemoteButton(Ico.Apps, "Apps", Modifier.weight(1f)) { viewModel.onAppsClicked() }
@@ -432,7 +440,10 @@ private fun DirectionPad(viewModel: RemoteViewModel) {
             FitButton(
                 label = "OK",
                 onClick = { viewModel.onDpadCenter() },
-                modifier = Modifier.size(88.dp),
+                modifier = Modifier.size(88.dp).heldRemoteInput(
+                    HeldRemoteKey.OK,
+                    viewModel::onHeldInputDown
+                ) { _, holdId -> viewModel.onHeldInputUp(holdId) },
                 shape = CircleShape,
                 textStyle = MaterialTheme.typography.titleLarge
             )
@@ -445,9 +456,23 @@ private fun DirectionPad(viewModel: RemoteViewModel) {
 @Composable
 private fun MediaRow(viewModel: RemoteViewModel, onKeyboardClicked: () -> Unit) {
     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        RemoteButton(Ico.Rewind, "Rewind", Modifier.weight(1f)) { viewModel.onRewindClicked() }
+        RemoteButton(
+            Ico.Rewind,
+            "Rewind",
+            Modifier.weight(1f).heldRemoteInput(
+                HeldRemoteKey.REWIND,
+                viewModel::onHeldInputDown
+            ) { _, holdId -> viewModel.onHeldInputUp(holdId) }
+        ) { viewModel.onRewindClicked() }
         RemoteButton(Ico.Keyboard, "Keyboard", Modifier.weight(1f)) { onKeyboardClicked() }
-        RemoteButton(Ico.Forward, "Forward", Modifier.weight(1f)) { viewModel.onForwardClicked() }
+        RemoteButton(
+            Ico.Forward,
+            "Forward",
+            Modifier.weight(1f).heldRemoteInput(
+                HeldRemoteKey.FORWARD,
+                viewModel::onHeldInputDown
+            ) { _, holdId -> viewModel.onHeldInputUp(holdId) }
+        ) { viewModel.onForwardClicked() }
     }
 }
 

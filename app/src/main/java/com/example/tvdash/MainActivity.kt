@@ -48,21 +48,41 @@ class MainActivity : ComponentActivity() {
     private companion object {
         const val TAG = "MainActivity"
         const val ACTION_INSTALL_COMPLETE = "com.example.tvdash.INSTALL_COMPLETE"
+        const val PREF_BLUETOOTH_PERMISSION_REQUESTED = "bluetooth_connect_permission_requested"
     }
 
-private var restrictedSettingsPrompted = false
+    private var restrictedSettingsPrompted = false
+    private var permissionOverlayDismissed = false
+    private var showBluetoothPermissionRationale by mutableStateOf(false)
+    private var bluetoothPermissionPermanentlyDenied by mutableStateOf(false)
 
     /** Lets TV Dash accept the phone's Bluetooth link. Android 12+ shows this as "Nearby devices". */
-    private val askBluetooth = registerForActivityResult(ActivityResultContracts.RequestPermission()) { }
+    private val askBluetooth = registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        if (granted) permissionOverlayDismissed = false
+        refreshBluetoothPermission(showOverlay = !granted)
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         ContextCompat.startForegroundService(this, Intent(this, RemoteService::class.java))
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
-            checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED
-        ) askBluetooth.launch(Manifest.permission.BLUETOOTH_CONNECT)
+        refreshBluetoothPermission(showOverlay = true)
         setContent {
-            MaterialTheme(colorScheme = darkColorScheme()) { HomeScreen() }
+            MaterialTheme(colorScheme = darkColorScheme()) {
+                Box(Modifier.fillMaxSize()) {
+                    HomeScreen()
+                    if (showBluetoothPermissionRationale) {
+                        BluetoothPermissionRationaleOverlay(
+                            permanentlyDenied = bluetoothPermissionPermanentlyDenied,
+                            onAllow = { requestBluetoothPermission() },
+                            onOpenSettings = { openHiddenSystemSettings() },
+                            onContinueWithoutBluetooth = {
+                                permissionOverlayDismissed = true
+                                showBluetoothPermissionRationale = false
+                            }
+                        )
+                    }
+                }
+            }
         }
 
         // Retain compatibility with direct status intents, but never launch nested intents
@@ -78,7 +98,43 @@ private var restrictedSettingsPrompted = false
 
     override fun onResume() {
         super.onResume()
+        refreshBluetoothPermission(showOverlay = true)
         checkAndUnlockAccessibilityProfile()
+    }
+
+    private fun refreshBluetoothPermission(showOverlay: Boolean) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) {
+            bluetoothPermissionPermanentlyDenied = false
+            showBluetoothPermissionRationale = false
+            return
+        }
+
+        val bluetoothPermissionGranted =
+            checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT) == PackageManager.PERMISSION_GRANTED
+        if (bluetoothPermissionGranted) {
+            bluetoothPermissionPermanentlyDenied = false
+            showBluetoothPermissionRationale = false
+            return
+        }
+
+        val requestedBefore = getSharedPreferences("tvdash", Context.MODE_PRIVATE)
+            .getBoolean(PREF_BLUETOOTH_PERMISSION_REQUESTED, false)
+        bluetoothPermissionPermanentlyDenied = requestedBefore &&
+            !shouldShowRequestPermissionRationale(Manifest.permission.BLUETOOTH_CONNECT)
+        if (showOverlay && !permissionOverlayDismissed) {
+            showBluetoothPermissionRationale = true
+        }
+    }
+
+    private fun requestBluetoothPermission() {
+        if (bluetoothPermissionPermanentlyDenied) {
+            openHiddenSystemSettings()
+            return
+        }
+        getSharedPreferences("tvdash", Context.MODE_PRIVATE).edit()
+            .putBoolean(PREF_BLUETOOTH_PERMISSION_REQUESTED, true)
+            .apply()
+        askBluetooth.launch(Manifest.permission.BLUETOOTH_CONNECT)
     }
 
     private fun checkAndUnlockAccessibilityProfile() {

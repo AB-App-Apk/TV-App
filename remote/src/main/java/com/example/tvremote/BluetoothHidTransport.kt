@@ -15,6 +15,9 @@ import android.content.pm.PackageManager
 import android.os.Build
 import android.util.Log
 import androidx.core.content.ContextCompat
+import com.example.tvlink.HeldRemoteKey
+import com.example.tvlink.HeldInputProtocol
+import java.util.concurrent.ConcurrentHashMap
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -160,6 +163,14 @@ class BluetoothHidTransport(context: Context) : RemoteTransport {
     private val state = MutableStateFlow(ConnectionState.DISCONNECTED)
     private val sendLock = Mutex()
 
+    private data class HeldReport(
+        val proxy: BluetoothHidDevice,
+        val device: BluetoothDevice,
+        val usage: Usage
+    )
+
+    private val heldReports = ConcurrentHashMap<String, HeldReport>()
+
     @Volatile private var hid: BluetoothHidDevice? = null
     @Volatile private var registered = false
     @Volatile private var attaching = false
@@ -228,6 +239,7 @@ class BluetoothHidTransport(context: Context) : RemoteTransport {
             registered = false
             attaching = false
             connectedAddress = null
+            heldReports.clear()
             state.value = ConnectionState.DISCONNECTED
         }
     }
@@ -236,7 +248,10 @@ class BluetoothHidTransport(context: Context) : RemoteTransport {
         object : BluetoothHidDevice.Callback() {
             override fun onAppStatusChanged(pluggedDevice: BluetoothDevice?, registered: Boolean) {
                 this@BluetoothHidTransport.registered = registered
-                if (!registered) state.value = ConnectionState.DISCONNECTED
+                if (!registered) {
+                    heldReports.clear()
+                    state.value = ConnectionState.DISCONNECTED
+                }
             }
 
             override fun onConnectionStateChanged(device: BluetoothDevice, newState: Int) {
@@ -250,6 +265,7 @@ class BluetoothHidTransport(context: Context) : RemoteTransport {
                     else -> {
                         connectedAddress = null
                         bootProtocol = false
+                        heldReports.clear()
                         state.value = ConnectionState.DISCONNECTED
                     }
                 }
@@ -294,6 +310,7 @@ class BluetoothHidTransport(context: Context) : RemoteTransport {
             override fun onVirtualCableUnplug(device: BluetoothDevice) {
                 connectedAddress = null
                 bootProtocol = false
+                heldReports.clear()
                 state.value = ConnectionState.DISCONNECTED
             }
         }
@@ -344,6 +361,7 @@ class BluetoothHidTransport(context: Context) : RemoteTransport {
         attaching = false
         connectedAddress = null
         bootProtocol = false
+        heldReports.clear()
         state.value = ConnectionState.DISCONNECTED
     }
 
@@ -411,6 +429,61 @@ class BluetoothHidTransport(context: Context) : RemoteTransport {
             }
         }
         return DeliveryResult.Delivered("ok")
+    }
+
+    /**
+     * Sends one native HID DOWN report and retains its identity until [endHeldInput].
+     * This does not wait for a timer or send an immediate release.
+     */
+    suspend fun startHeldInput(holdId: String, key: HeldRemoteKey): Boolean {
+        if (!HeldInputProtocol.isValidHoldId(holdId)) return false
+        val command = when (key) {
+            HeldRemoteKey.BACK -> RemoteCommand.BACK
+            HeldRemoteKey.OK -> RemoteCommand.OK
+            HeldRemoteKey.FORWARD -> RemoteCommand.FORWARD
+            HeldRemoteKey.REWIND -> RemoteCommand.REWIND
+        }
+        val usage = usageFor(command) ?: return false
+        val (proxy, device) = try {
+            connectedLink()
+        } catch (_: IOException) {
+            return false
+        }
+        return sendLock.withLock {
+            if (heldReports.containsKey(holdId)) return@withLock true
+            if (heldReports.isNotEmpty()) return@withLock false
+            try {
+                when (usage) {
+                    is Usage.Key -> sendKeyboard(proxy, device, usage.modifiers, usage.code)
+                    is Usage.Media -> {
+                        if (bootProtocol || !proxy.sendReport(device, REPORT_CONSUMER, consumerReport(usage.code))) {
+                            return@withLock false
+                        }
+                    }
+                    is Usage.SystemKey -> return@withLock false
+                }
+                heldReports[holdId] = HeldReport(proxy, device, usage)
+                true
+            } catch (e: SecurityException) {
+                throw IOException("Bluetooth permission is missing", e)
+            }
+        }
+    }
+
+    /** Releases exactly the report created by [startHeldInput]. Safe to call more than once. */
+    suspend fun endHeldInput(holdId: String) = withContext(NonCancellable) {
+        sendLock.withLock {
+            val held = heldReports.remove(holdId) ?: return@withLock
+            try {
+                when (held.usage) {
+                    is Usage.Key -> releaseKeyboard(held.proxy, held.device)
+                    is Usage.Media -> releaseConsumer(held.proxy, held.device)
+                    is Usage.SystemKey -> releaseSystem(held.proxy, held.device)
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "Held key release failed", e)
+            }
+        }
     }
 
     /** Types text as a US keyboard would. Characters without a key (accents, emoji) are skipped. */
