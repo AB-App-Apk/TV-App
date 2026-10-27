@@ -3,6 +3,9 @@ package com.example.tvremote
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
+import com.example.tvlink.HeldRemoteKey
+import kotlinx.coroutines.Job
+import java.util.concurrent.ConcurrentHashMap
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -122,6 +125,8 @@ class RemoteViewModel(
 
     /** How well the remote reaches the TV right now. Read-only; Layer 1 is the only writer. */
     val connectionState: StateFlow<RemoteConnectionState> = connection.state
+
+    private val heldStartJobs = ConcurrentHashMap<String, Job>()
 
     /** A plain sentence about why something is not working, for a status line. Empty when there is nothing to say. Safe to ignore. */
     val hint: StateFlow<String> = connection.hint
@@ -339,6 +344,24 @@ class RemoteViewModel(
     /** The keyboard panel was closed: "text?done=1". */
     fun onKeyboardClosed() {
         keyboardQueue.trySend("text?done=1")
+    }
+
+    // ---------------------------------------------------------------- held-button gestures
+
+    /** Begins one physical touch hold. The job is retained so a very quick release still waits for DOWN to finish. */
+    fun onHeldInputDown(key: HeldRemoteKey, holdId: String) {
+        val job = viewModelScope.launch {
+            connection.beginHeldInput(holdId, key)
+        }
+        heldStartJobs[holdId] = job
+    }
+
+    /** Ends the same hold after DOWN completes, including pointer cancellation. */
+    fun onHeldInputUp(key: HeldRemoteKey, holdId: String) {
+        viewModelScope.launch {
+            heldStartJobs.remove(holdId)?.join()
+            connection.endHeldInput(holdId)
+        }
     }
 
     // ---------------------------------------------------------------- helpers
