@@ -325,8 +325,8 @@ class ConnectionManager(
         // Back and OK cannot be held through AccessibilityService. Preserve their existing one-shot behavior
         // when HID is unavailable instead of swallowing a touch tap.
         val command = if (key == HeldRemoteKey.BACK) RemoteCommand.BACK else RemoteCommand.OK
-        val result = sendRemoteCommand(command)
-        if ((result as? DeliveryResult.Delivered)?.reply in setOf(RemoteStatus.OK, RemoteStatus.QUEUED)) {
+        val result = (sendRemoteCommand(command) as? DeliveryResult.Delivered)?.reply
+        if (result == RemoteStatus.OK || result == RemoteStatus.QUEUED) {
             heldRoutes[holdId] = HeldRoad.TAP
             return true
         }
