@@ -196,7 +196,7 @@ class ConnectionManager(
     private val sendLock = Mutex()
     private val buffer = ArrayDeque<Pending>()
 
-    private enum class HeldRoad { KEYBOARD, DASH }
+    private enum class HeldRoad { KEYBOARD, DASH, TAP }
 
     private val heldRoutes = ConcurrentHashMap<String, HeldRoad>()
 
@@ -319,6 +319,16 @@ class ConnectionManager(
                 setDash(false)
                 dashNudge.trySend(Unit)
             }
+            return false
+        }
+
+        // Back and OK cannot be held through AccessibilityService. Preserve their existing one-shot behavior
+        // when HID is unavailable instead of swallowing a touch tap.
+        val command = if (key == HeldRemoteKey.BACK) RemoteCommand.BACK else RemoteCommand.OK
+        val result = sendRemoteCommand(command)
+        if ((result as? DeliveryResult.Delivered)?.reply in setOf(RemoteStatus.OK, RemoteStatus.QUEUED)) {
+            heldRoutes[holdId] = HeldRoad.TAP
+            return true
         }
         return false
     }
@@ -333,7 +343,7 @@ class ConnectionManager(
                     link.get(HeldInputProtocol.path(holdId, key, HeldAction.UP))
                 }
             }
-            null -> Unit
+            HeldRoad.TAP, null -> Unit
         }
     }
 
