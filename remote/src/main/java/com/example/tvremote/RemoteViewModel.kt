@@ -357,7 +357,7 @@ class RemoteViewModel(
     }
 
     /** Ends the same hold after DOWN completes, including pointer cancellation. */
-    fun onHeldInputUp(key: HeldRemoteKey, holdId: String) {
+    fun onHeldInputUp(holdId: String) {
         viewModelScope.launch {
             heldStartJobs.remove(holdId)?.join()
             connection.endHeldInput(holdId)
