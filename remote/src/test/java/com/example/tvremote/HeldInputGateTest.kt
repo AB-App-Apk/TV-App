@@ -52,6 +52,7 @@ class HeldInputGateTest {
         finishCommand.complete(Unit)
         command.join()
         val lease = holdAcquired.await()
+        hold.join()
         assertTrue(hold.isCompleted)
         lease.release()
     }
