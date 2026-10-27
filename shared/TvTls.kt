@@ -266,3 +266,5 @@ fun sameFingerprint(a: String, b: String): Boolean {
     /** True when [error] or anything that caused it is a certificate problem (the pin did not match). */
     fun isCertificateProblem(error: Throwable): Boolean =
         generateSequence(error) { it.cause }.any { it is CertificateException }
+}
+}
