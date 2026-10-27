@@ -273,12 +273,13 @@ class ConnectionManager(
         heldKeyById.clear()
         heldTimeouts.clear()
         heldRenewals.clear()
-        heldInputLease.getAndSet(null)?.release()
+        // Close the HID route and publish the disconnected state before waking commands waiting on the input gate.
         keyboardLink.release()
         dashUp = false
         keysUp = false
         _state.value = RemoteConnectionState.Disconnected
         _hint.value = ""
+        heldInputLease.getAndSet(null)?.release()
         scope.launch { sendLock.withLock { buffer.clear() } }
         scope.launch {
             keyboardLock.withLock {
