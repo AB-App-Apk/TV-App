@@ -60,16 +60,20 @@ internal class HeldKeyWatchdog(
 
     private fun start(holdId: String, key: HeldRemoteKey): String {
         val hold = ActiveHold(key, uptimeMillis())
-        synchronized(active) {
-            if (closed) return "closed"
-            active[holdId]?.let { existing ->
-                return if (existing.key == key) "ok" else "bad-hold"
-            }
-            if (active.size >= MAX_ACTIVE_HOLDS) return "busy"
-            active[holdId] = hold
-        }
 
+        // Acquire the per-hold lock BEFORE publishing the hold. Otherwise UP/close can remove a
+        // just-published hold, observe downDelivered=false, and return before DOWN is dispatched.
+        // start would then dispatch DOWN with no remaining owner responsible for the matching UP.
         synchronized(hold) {
+            synchronized(active) {
+                if (closed) return "closed"
+                active[holdId]?.let { existing ->
+                    return if (existing.key == key) "ok" else "bad-hold"
+                }
+                if (active.size >= MAX_ACTIVE_HOLDS) return "busy"
+                active[holdId] = hold
+            }
+
             val result = try {
                 onDown(key, hold.downTime)
             } catch (_: Exception) {
