@@ -8,6 +8,9 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.util.concurrent.CopyOnWriteArrayList
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
 
 class HeldKeyWatchdogTest {
     @Test
@@ -35,6 +38,100 @@ class HeldKeyWatchdogTest {
             assertEquals(listOf(HeldRemoteKey.FORWARD to 123L), ups)
         } finally {
             watchdog.close()
+        }
+    }
+
+    @Test
+    fun upCannotFinishBetweenHoldPublicationAndDownDispatch() {
+        val published = CountDownLatch(1)
+        val allowDown = CountDownLatch(1)
+        val releaseReached = CountDownLatch(1)
+        val allowRelease = CountDownLatch(1)
+        val events = CopyOnWriteArrayList<String>()
+        val executor = Executors.newFixedThreadPool(2)
+        val watchdog = HeldKeyWatchdog(
+            onDown = { _, _ -> events.add("down"); "ok" },
+            onUp = { _, _ -> events.add("up") },
+            uptimeMillis = { 123L },
+            watchdogTimeoutMs = 5_000L,
+            afterHoldPublished = {
+                published.countDown()
+                assertTrue("test did not release DOWN dispatch", allowDown.await(10, TimeUnit.SECONDS))
+            },
+            beforeReleaseLock = {
+                releaseReached.countDown()
+                assertTrue("test did not release UP", allowRelease.await(10, TimeUnit.SECONDS))
+            }
+        )
+        val id = "c0ffee00-0000-4000-8000-000000000001"
+
+        try {
+            val down = executor.submit<String> {
+                watchdog.handle(id, HeldRemoteKey.FORWARD, HeldAction.DOWN)
+            }
+            assertTrue("hold was not published", published.await(10, TimeUnit.SECONDS))
+            val up = executor.submit<String> {
+                watchdog.handle(id, HeldRemoteKey.FORWARD, HeldAction.UP)
+            }
+            assertTrue("UP did not reach the post-removal boundary", releaseReached.await(10, TimeUnit.SECONDS))
+            assertTrue("UP returned before DOWN dispatch was allowed", !up.isDone)
+
+            allowDown.countDown()
+            allowRelease.countDown()
+            assertEquals("ok", down.get(10, TimeUnit.SECONDS))
+            assertEquals("ok", up.get(10, TimeUnit.SECONDS))
+            assertEquals(listOf("down", "up"), events)
+        } finally {
+            allowDown.countDown()
+            allowRelease.countDown()
+            watchdog.close()
+            executor.shutdownNow()
+        }
+    }
+
+    @Test
+    fun closeCannotFinishBetweenHoldPublicationAndDownDispatch() {
+        val published = CountDownLatch(1)
+        val allowDown = CountDownLatch(1)
+        val releaseReached = CountDownLatch(1)
+        val allowRelease = CountDownLatch(1)
+        val events = CopyOnWriteArrayList<String>()
+        val executor = Executors.newFixedThreadPool(2)
+        val watchdog = HeldKeyWatchdog(
+            onDown = { _, _ -> events.add("down"); "ok" },
+            onUp = { _, _ -> events.add("up") },
+            uptimeMillis = { 123L },
+            watchdogTimeoutMs = 5_000L,
+            afterHoldPublished = {
+                published.countDown()
+                assertTrue("test did not release DOWN dispatch", allowDown.await(10, TimeUnit.SECONDS))
+            },
+            beforeReleaseLock = {
+                releaseReached.countDown()
+                assertTrue("test did not release shutdown", allowRelease.await(10, TimeUnit.SECONDS))
+            }
+        )
+        val id = "c0ffee00-0000-4000-8000-000000000001"
+
+        try {
+            val down = executor.submit<String> {
+                watchdog.handle(id, HeldRemoteKey.FORWARD, HeldAction.DOWN)
+            }
+            assertTrue("hold was not published", published.await(10, TimeUnit.SECONDS))
+            val close = executor.submit { watchdog.close() }
+            assertTrue("shutdown did not reach hold release", releaseReached.await(10, TimeUnit.SECONDS))
+            assertTrue("shutdown returned before DOWN dispatch was allowed", !close.isDone)
+
+            allowDown.countDown()
+            allowRelease.countDown()
+            assertEquals("ok", down.get(10, TimeUnit.SECONDS))
+            close.get(10, TimeUnit.SECONDS)
+            assertEquals(listOf("down", "up"), events)
+        } finally {
+            allowDown.countDown()
+            allowRelease.countDown()
+            watchdog.close()
+            executor.shutdownNow()
         }
     }
 

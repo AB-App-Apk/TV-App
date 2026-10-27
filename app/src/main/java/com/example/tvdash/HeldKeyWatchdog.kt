@@ -21,7 +21,11 @@ internal class HeldKeyWatchdog(
     private val onDown: (HeldRemoteKey, Long) -> String,
     private val onUp: (HeldRemoteKey, Long) -> Unit,
     private val uptimeMillis: () -> Long = { SystemClock.uptimeMillis() },
-    private val watchdogTimeoutMs: Long = HeldInputProtocol.WATCHDOG_TIMEOUT_MS
+    private val watchdogTimeoutMs: Long = HeldInputProtocol.WATCHDOG_TIMEOUT_MS,
+    /** Test seam for coordinating the registration-to-dispatch race; production default is a no-op. */
+    private val afterHoldPublished: (String) -> Unit = {},
+    /** Test seam called after a hold leaves the active map but before release acquires its lock. */
+    private val beforeReleaseLock: (String) -> Unit = {}
 ) : AutoCloseable {
     private companion object {
         const val MAX_ACTIVE_HOLDS = 8
@@ -60,16 +64,24 @@ internal class HeldKeyWatchdog(
 
     private fun start(holdId: String, key: HeldRemoteKey): String {
         val hold = ActiveHold(key, uptimeMillis())
-        synchronized(active) {
-            if (closed) return "closed"
-            active[holdId]?.let { existing ->
-                return if (existing.key == key) "ok" else "bad-hold"
-            }
-            if (active.size >= MAX_ACTIVE_HOLDS) return "busy"
-            active[holdId] = hold
-        }
 
+        // Acquire the per-hold lock BEFORE publishing the hold. Otherwise UP/close can remove a
+        // just-published hold, observe downDelivered=false, and return before DOWN is dispatched.
+        // start would then dispatch DOWN with no remaining owner responsible for the matching UP.
         synchronized(hold) {
+            synchronized(active) {
+                if (closed) return "closed"
+                active[holdId]?.let { existing ->
+                    return if (existing.key == key) "ok" else "bad-hold"
+                }
+                if (active.size >= MAX_ACTIVE_HOLDS) return "busy"
+                active[holdId] = hold
+            }
+
+            // Still inside synchronized(hold): a concurrent UP/close may remove the map entry,
+            // but cannot observe downDelivered=false and return until DOWN has been dispatched.
+            afterHoldPublished(holdId)
+
             val result = try {
                 onDown(key, hold.downTime)
             } catch (_: Exception) {
@@ -126,6 +138,7 @@ internal class HeldKeyWatchdog(
 
     private fun release(holdId: String) {
         val hold = active.remove(holdId) ?: return
+        beforeReleaseLock(holdId)
         synchronized(hold) {
             hold.timeout?.cancel()
             hold.timeout = null
