@@ -251,23 +251,28 @@ class RemoteService : Service() {
             val keyCode = when (key) {
                 com.example.tvlink.HeldRemoteKey.FORWARD -> KeyEvent.KEYCODE_MEDIA_FAST_FORWARD
                 com.example.tvlink.HeldRemoteKey.REWIND -> KeyEvent.KEYCODE_MEDIA_REWIND
-                // Accessibility global actions are instantaneous; they cannot represent a native held-key state.
                 com.example.tvlink.HeldRemoteKey.BACK,
-                com.example.tvlink.HeldRemoteKey.OK -> return@HeldKeyWatchdog "unsupported"
+                com.example.tvlink.HeldRemoteKey.OK -> null
             }
-            val event = KeyEvent(downTime, downTime, KeyEvent.ACTION_DOWN, keyCode, 0)
-            getSystemService(AudioManager::class.java).dispatchMediaKeyEvent(event)
-            "ok"
+            if (keyCode == null) {
+                "unsupported"
+            } else {
+                val event = KeyEvent(downTime, downTime, KeyEvent.ACTION_DOWN, keyCode, 0)
+                getSystemService(AudioManager::class.java).dispatchMediaKeyEvent(event)
+                "ok"
+            }
         },
         onUp = { key, downTime ->
             val keyCode = when (key) {
                 com.example.tvlink.HeldRemoteKey.FORWARD -> KeyEvent.KEYCODE_MEDIA_FAST_FORWARD
                 com.example.tvlink.HeldRemoteKey.REWIND -> KeyEvent.KEYCODE_MEDIA_REWIND
                 com.example.tvlink.HeldRemoteKey.BACK,
-                com.example.tvlink.HeldRemoteKey.OK -> return@HeldKeyWatchdog
+                com.example.tvlink.HeldRemoteKey.OK -> null
             }
-            val event = KeyEvent(downTime, android.os.SystemClock.uptimeMillis(), KeyEvent.ACTION_UP, keyCode, 0)
-            getSystemService(AudioManager::class.java).dispatchMediaKeyEvent(event)
+            if (keyCode != null) {
+                val event = KeyEvent(downTime, android.os.SystemClock.uptimeMillis(), KeyEvent.ACTION_UP, keyCode, 0)
+                getSystemService(AudioManager::class.java).dispatchMediaKeyEvent(event)
+            }
         }
     )
 
@@ -380,10 +385,14 @@ class RemoteService : Service() {
 
     private fun route(u: Uri): String = when (u.path) {
         "/hold" -> {
-            val holdId = u.getQueryParameter("id") ?: return "bad-hold"
-            val key = com.example.tvlink.HeldRemoteKey.fromWire(u.getQueryParameter("key")) ?: return "bad-hold"
-            val action = com.example.tvlink.HeldAction.fromWire(u.getQueryParameter("action")) ?: return "bad-hold"
-            heldKeyWatchdog.handle(holdId, key, action)
+            val holdId = u.getQueryParameter("id")
+            val key = com.example.tvlink.HeldRemoteKey.fromWire(u.getQueryParameter("key"))
+            val action = com.example.tvlink.HeldAction.fromWire(u.getQueryParameter("action"))
+            if (holdId == null || key == null || action == null) {
+                "bad-hold"
+            } else {
+                heldKeyWatchdog.handle(holdId, key, action)
+            }
         }
         "/apps" -> JSONArray().also { a ->
             appList().forEach { (n, p) -> a.put(JSONObject().put("n", n).put("p", p)) }
