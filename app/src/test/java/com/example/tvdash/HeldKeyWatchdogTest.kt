@@ -8,6 +8,9 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.util.concurrent.CopyOnWriteArrayList
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
 
 class HeldKeyWatchdogTest {
     @Test
@@ -35,6 +38,88 @@ class HeldKeyWatchdogTest {
             assertEquals(listOf(HeldRemoteKey.FORWARD to 123L), ups)
         } finally {
             watchdog.close()
+        }
+    }
+
+    @Test
+    fun upDuringDownDispatchStillPairsDownWithExactlyOneUp() {
+        val downEntered = CountDownLatch(1)
+        val finishDown = CountDownLatch(1)
+        val events = CopyOnWriteArrayList<String>()
+        val executor = Executors.newFixedThreadPool(2)
+        val watchdog = HeldKeyWatchdog(
+            onDown = { _, _ ->
+                downEntered.countDown()
+                assertTrue("test did not release DOWN callback", finishDown.await(3, TimeUnit.SECONDS))
+                events.add("down")
+                "ok"
+            },
+            onUp = { _, _ -> events.add("up") },
+            watchdogTimeoutMs = 5_000L
+        )
+        val id = "c0ffee00-0000-4000-8000-000000000001"
+
+        try {
+            val down = executor.submit<String> {
+                watchdog.handle(id, HeldRemoteKey.FORWARD, HeldAction.DOWN)
+            }
+            assertTrue(downEntered.await(2, TimeUnit.SECONDS))
+            val upStarted = CountDownLatch(1)
+            val up = executor.submit<String> {
+                upStarted.countDown()
+                watchdog.handle(id, HeldRemoteKey.FORWARD, HeldAction.UP)
+            }
+            assertTrue(upStarted.await(2, TimeUnit.SECONDS))
+            finishDown.countDown()
+
+            assertEquals("ok", down.get(3, TimeUnit.SECONDS))
+            assertEquals("ok", up.get(3, TimeUnit.SECONDS))
+            assertEquals(listOf("down", "up"), events)
+        } finally {
+            finishDown.countDown()
+            watchdog.close()
+            executor.shutdownNow()
+        }
+    }
+
+    @Test
+    fun closeDuringDownDispatchStillPairsDownWithExactlyOneUp() {
+        val downEntered = CountDownLatch(1)
+        val finishDown = CountDownLatch(1)
+        val events = CopyOnWriteArrayList<String>()
+        val executor = Executors.newFixedThreadPool(2)
+        val watchdog = HeldKeyWatchdog(
+            onDown = { _, _ ->
+                downEntered.countDown()
+                assertTrue("test did not release DOWN callback", finishDown.await(3, TimeUnit.SECONDS))
+                events.add("down")
+                "ok"
+            },
+            onUp = { _, _ -> events.add("up") },
+            watchdogTimeoutMs = 5_000L
+        )
+        val id = "c0ffee00-0000-4000-8000-000000000001"
+
+        try {
+            val down = executor.submit<String> {
+                watchdog.handle(id, HeldRemoteKey.FORWARD, HeldAction.DOWN)
+            }
+            assertTrue(downEntered.await(2, TimeUnit.SECONDS))
+            val closeStarted = CountDownLatch(1)
+            val close = executor.submit {
+                closeStarted.countDown()
+                watchdog.close()
+            }
+            assertTrue(closeStarted.await(2, TimeUnit.SECONDS))
+            finishDown.countDown()
+
+            assertEquals("ok", down.get(3, TimeUnit.SECONDS))
+            close.get(3, TimeUnit.SECONDS)
+            assertEquals(listOf("down", "up"), events)
+        } finally {
+            finishDown.countDown()
+            watchdog.close()
+            executor.shutdownNow()
         }
     }
 
