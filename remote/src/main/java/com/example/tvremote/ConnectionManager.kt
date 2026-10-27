@@ -198,7 +198,7 @@ class ConnectionManager(
     private val sendLock = Mutex()
     private val buffer = ArrayDeque<Pending>()
 
-    private enum class HeldRoad { KEYBOARD, DASH, TAP }
+    private enum class HeldRoad { KEYBOARD, DASH, UNCERTAIN_DASH, TAP }
 
     private val heldRoutes = ConcurrentHashMap<String, HeldRoad>()
     private val heldTimeouts = ConcurrentHashMap<String, Job>()
@@ -344,7 +344,11 @@ class ConnectionManager(
                 if (reply is TvReply.Unreachable) {
                     setDash(false)
                     dashNudge.trySend(Unit)
-                    // The DOWN may have reached the TV even if its reply was lost; do not risk a duplicate press.
+                    // The DOWN may have reached the TV even if its reply was lost. Keep the gate reserved and
+                    // arrange a best-effort UP; never let another command race a possibly active media hold.
+                    heldKeyById[holdId] = key
+                    trackHeld(holdId, HeldRoad.UNCERTAIN_DASH)
+                    keepGate = true
                     return false
                 }
                 if (reply is TvReply.Rejected) {
@@ -394,7 +398,7 @@ class ConnectionManager(
             try {
                 when (road) {
                     HeldRoad.KEYBOARD -> keyboardLink.endHeldInput(holdId)
-                    HeldRoad.DASH -> {
+                    HeldRoad.DASH, HeldRoad.UNCERTAIN_DASH -> {
                         // Keep ordinary input blocked until the matching TV-side UP request has been attempted.
                         heldKeyById.remove(holdId)?.let { key ->
                             link.get(HeldInputProtocol.path(holdId, key, HeldAction.UP))
@@ -414,7 +418,7 @@ class ConnectionManager(
 
         // The lease is renewed only while the captured touch remains active. If renewal stops, the independent
         // timeout still releases the phone-side hold; the TV has its own matching four-second network watchdog.
-        if (road == HeldRoad.TAP) return
+        if (road == HeldRoad.TAP || road == HeldRoad.UNCERTAIN_DASH) return
         heldRenewals[holdId] = scope.launch {
             while (isActive && heldRoutes[holdId] == road) {
                 delay(HeldInputProtocol.LEASE_RENEW_INTERVAL_MS)
@@ -451,7 +455,7 @@ class ConnectionManager(
                     false
                 }
             }
-            HeldRoad.TAP -> false
+            HeldRoad.UNCERTAIN_DASH, HeldRoad.TAP -> false
         }
     }
 
