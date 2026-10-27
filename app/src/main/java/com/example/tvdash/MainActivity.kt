@@ -53,7 +53,6 @@ class MainActivity : ComponentActivity() {
 
     private var restrictedSettingsPrompted = false
     private var permissionOverlayDismissed = false
-    private var bluetoothPermissionGranted by mutableStateOf(false)
     private var showBluetoothPermissionRationale by mutableStateOf(false)
     private var bluetoothPermissionPermanentlyDenied by mutableStateOf(false)
 
@@ -105,13 +104,12 @@ class MainActivity : ComponentActivity() {
 
     private fun refreshBluetoothPermission(showOverlay: Boolean) {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) {
-            bluetoothPermissionGranted = true
             bluetoothPermissionPermanentlyDenied = false
             showBluetoothPermissionRationale = false
             return
         }
 
-        bluetoothPermissionGranted =
+        val bluetoothPermissionGranted =
             checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT) == PackageManager.PERMISSION_GRANTED
         if (bluetoothPermissionGranted) {
             bluetoothPermissionPermanentlyDenied = false
