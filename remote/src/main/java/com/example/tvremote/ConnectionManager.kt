@@ -13,6 +13,7 @@ import com.example.tvlink.HeldInputProtocol
 import com.example.tvlink.HeldRemoteKey
 import java.util.concurrent.ConcurrentHashMap
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancelChildren
@@ -199,6 +200,7 @@ class ConnectionManager(
     private enum class HeldRoad { KEYBOARD, DASH, TAP }
 
     private val heldRoutes = ConcurrentHashMap<String, HeldRoad>()
+    private val heldTimeouts = ConcurrentHashMap<String, Job>()
 
     /** Typing requests are handled one at a time, in order. Everything below that touches the session holds this lock. */
     private val keyboardLock = Mutex()
@@ -260,6 +262,9 @@ class ConnectionManager(
         }
         networkCallback = null
         scope.coroutineContext.cancelChildren()
+        heldRoutes.clear()
+        heldKeyById.clear()
+        heldTimeouts.clear()
         keyboardLink.release()
         dashUp = false
         keysUp = false
@@ -299,7 +304,7 @@ class ConnectionManager(
         if (keysUp) {
             try {
                 if (keyboardLink.startHeldInput(holdId, key)) {
-                    heldRoutes[holdId] = HeldRoad.KEYBOARD
+                    trackHeld(holdId, HeldRoad.KEYBOARD)
                     return true
                 }
             } catch (e: IOException) {
@@ -311,8 +316,8 @@ class ConnectionManager(
         if (key == HeldRemoteKey.FORWARD || key == HeldRemoteKey.REWIND) {
             val reply = link.get(HeldInputProtocol.path(holdId, key, HeldAction.DOWN))
             if (reply is TvReply.Ok && reply.body.trim() == RemoteStatus.OK) {
-                heldRoutes[holdId] = HeldRoad.DASH
                 heldKeyById[holdId] = key
+                trackHeld(holdId, HeldRoad.DASH)
                 return true
             }
             if (reply is TvReply.Unreachable) {
@@ -327,7 +332,7 @@ class ConnectionManager(
         val command = if (key == HeldRemoteKey.BACK) RemoteCommand.BACK else RemoteCommand.OK
         val result = (sendRemoteCommand(command) as? DeliveryResult.Delivered)?.reply
         if (result == RemoteStatus.OK || result == RemoteStatus.QUEUED) {
-            heldRoutes[holdId] = HeldRoad.TAP
+            trackHeld(holdId, HeldRoad.TAP)
             return true
         }
         return false
@@ -335,6 +340,12 @@ class ConnectionManager(
 
     /** Ends the exact route chosen by [beginHeldInput]; duplicate UPs are harmless. */
     suspend fun endHeldInput(holdId: String) {
+        endHeldInput(holdId, fromWatchdog = false)
+    }
+
+    private suspend fun endHeldInput(holdId: String, fromWatchdog: Boolean) {
+        val timeout = heldTimeouts.remove(holdId)
+        if (!fromWatchdog) timeout?.cancel()
         when (heldRoutes.remove(holdId)) {
             HeldRoad.KEYBOARD -> keyboardLink.endHeldInput(holdId)
             HeldRoad.DASH -> {
@@ -344,6 +355,14 @@ class ConnectionManager(
                 }
             }
             HeldRoad.TAP, null -> Unit
+        }
+    }
+
+    private fun trackHeld(holdId: String, road: HeldRoad) {
+        heldRoutes[holdId] = road
+        heldTimeouts[holdId] = scope.launch {
+            delay(HeldInputProtocol.WATCHDOG_TIMEOUT_MS)
+            endHeldInput(holdId, fromWatchdog = true)
         }
     }
 
