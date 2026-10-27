@@ -294,6 +294,7 @@ class ConnectionManager(
     suspend fun beginHeldInput(holdId: String, key: HeldRemoteKey): Boolean {
         if (!HeldInputProtocol.isValidHoldId(holdId)) return false
         if (heldRoutes.containsKey(holdId)) return true
+        if (heldRoutes.isNotEmpty()) return false
 
         if (keysUp) {
             try {
@@ -327,12 +328,8 @@ class ConnectionManager(
         when (heldRoutes.remove(holdId)) {
             HeldRoad.KEYBOARD -> keyboardLink.endHeldInput(holdId)
             HeldRoad.DASH -> {
-                val key = if (holdId.isNotEmpty()) {
-                    // The TV stores the key against this identifier, so an UP needs only the matching identifier.
-                    // Its endpoint validates the other fields as part of the shared wire protocol.
-                    heldKeyById.remove(holdId)
-                } else null
-                if (key != null) {
+                // The TV stores the key against this identifier, so an UP uses the matching ID and key.
+                heldKeyById.remove(holdId)?.let { key ->
                     link.get(HeldInputProtocol.path(holdId, key, HeldAction.UP))
                 }
             }
