@@ -18,6 +18,7 @@ enum class HeldRemoteKey(val wireName: String) {
 /** A hold is an explicit state transition; it is never implemented by a local repeat timer. */
 enum class HeldAction(val wireName: String) {
     DOWN("down"),
+    RENEW("renew"),
     UP("up");
 
     companion object {
@@ -28,7 +29,9 @@ enum class HeldAction(val wireName: String) {
 
 /** Protocol helpers shared by both APKs, since ../shared is compiled into each application. */
 object HeldInputProtocol {
+    /** Safety lease deadline; sustained holds renew before this expires. */
     const val WATCHDOG_TIMEOUT_MS = 4_000L
+    const val LEASE_RENEW_INTERVAL_MS = 1_000L
 
     /** UUID-shaped identifiers prevent two concurrent button gestures from releasing each other. */
     fun isValidHoldId(value: String): Boolean =
