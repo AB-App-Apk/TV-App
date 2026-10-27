@@ -471,7 +471,7 @@ class BluetoothHidTransport(context: Context) : RemoteTransport {
     }
 
     /** Releases exactly the report created by [startHeldInput]. Safe to call more than once. */
-    suspend fun endHeldInput(holdId: String) {
+    suspend fun endHeldInput(holdId: String) = withContext(NonCancellable) {
         sendLock.withLock {
             val held = heldReports.remove(holdId) ?: return@withLock
             try {
