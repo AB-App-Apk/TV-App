@@ -19,7 +19,9 @@ import java.util.concurrent.ConcurrentHashMap
  */
 internal class HeldKeyWatchdog(
     private val onDown: (HeldRemoteKey, Long) -> String,
-    private val onUp: (HeldRemoteKey, Long) -> Unit
+    private val onUp: (HeldRemoteKey, Long) -> Unit,
+    private val uptimeMillis: () -> Long = { SystemClock.uptimeMillis() },
+    private val watchdogTimeoutMs: Long = HeldInputProtocol.WATCHDOG_TIMEOUT_MS
 ) : AutoCloseable {
     private companion object {
         const val MAX_ACTIVE_HOLDS = 8
@@ -43,6 +45,7 @@ internal class HeldKeyWatchdog(
         if (!HeldInputProtocol.isValidHoldId(holdId)) return "bad-hold"
         return when (action) {
             HeldAction.DOWN -> start(holdId, key)
+            HeldAction.RENEW -> renew(holdId, key)
             HeldAction.UP -> {
                 val existing = active[holdId]
                 if (existing != null && existing.key != key) {
@@ -56,7 +59,7 @@ internal class HeldKeyWatchdog(
     }
 
     private fun start(holdId: String, key: HeldRemoteKey): String {
-        val hold = ActiveHold(key, SystemClock.uptimeMillis())
+        val hold = ActiveHold(key, uptimeMillis())
         synchronized(active) {
             if (closed) return "closed"
             active[holdId]?.let { existing ->
@@ -79,22 +82,55 @@ internal class HeldKeyWatchdog(
             }
 
             hold.downDelivered = true
-            val timeout = scope.launch {
-                delay(HeldInputProtocol.WATCHDOG_TIMEOUT_MS)
-                release(holdId)
-            }
-            hold.timeout = timeout
-            // An UP can remove this entry while onDown is being handled; do not leave an orphan timeout.
-            if (active[holdId] !== hold) timeout.cancel()
+            scheduleTimeout(holdId, hold)
         }
         return "ok"
+    }
+
+    private fun renew(holdId: String, key: HeldRemoteKey): String {
+        val hold = active[holdId] ?: return "expired"
+        if (hold.key != key) return "bad-hold"
+        synchronized(hold) {
+            if (closed) return "closed"
+            if (active[holdId] !== hold || !hold.downDelivered) return "expired"
+            scheduleTimeout(holdId, hold)
+        }
+        return "ok"
+    }
+
+    private fun scheduleTimeout(holdId: String, hold: ActiveHold) {
+        hold.timeout?.cancel()
+        lateinit var timeout: Job
+        timeout = scope.launch {
+            delay(watchdogTimeoutMs)
+            var shouldRelease = false
+            synchronized(hold) {
+                // A stale timeout must not release a hold whose lease has since been renewed.
+                if (active[holdId] === hold && hold.timeout === timeout) {
+                    active.remove(holdId, hold)
+                    hold.timeout = null
+                    shouldRelease = hold.downDelivered
+                    hold.downDelivered = false
+                }
+            }
+            if (shouldRelease) {
+                try {
+                    onUp(hold.key, hold.downTime)
+                } catch (_: Exception) {
+                    // One failed release must not stop other held-key timeouts.
+                }
+            }
+        }
+        hold.timeout = timeout
     }
 
     private fun release(holdId: String) {
         val hold = active.remove(holdId) ?: return
         synchronized(hold) {
             hold.timeout?.cancel()
+            hold.timeout = null
             if (!hold.downDelivered) return
+            hold.downDelivered = false
             try {
                 onUp(hold.key, hold.downTime)
             } catch (_: Exception) {
