@@ -311,7 +311,7 @@ class ConnectionManager(
         }
 
     private suspend fun beginHeldInputLocked(holdId: String, key: HeldRemoteKey): Boolean {
-        if (!HeldInputProtocol.isValidHoldId(holdId)) return false
+        if (!started || !HeldInputProtocol.isValidHoldId(holdId)) return false
         if (heldRoutes.containsKey(holdId)) return true
         if (heldRoutes.isNotEmpty()) return false
 
@@ -320,9 +320,14 @@ class ConnectionManager(
         heldInputLease.getAndSet(lease)?.release()
         var keepGate = false
         try {
+            if (!started) return false
             if (keysUp) {
                 try {
                     if (keyboardLink.startHeldInput(holdId, key)) {
+                        if (!started) {
+                            keyboardLink.endHeldInput(holdId)
+                            return false
+                        }
                         trackHeld(holdId, HeldRoad.KEYBOARD)
                         keepGate = true
                         return true
@@ -336,6 +341,10 @@ class ConnectionManager(
             if (key == HeldRemoteKey.FORWARD || key == HeldRemoteKey.REWIND) {
                 val reply = link.get(HeldInputProtocol.path(holdId, key, HeldAction.DOWN))
                 if (reply is TvReply.Ok && reply.body.trim() == RemoteStatus.OK) {
+                    if (!started) {
+                        link.get(HeldInputProtocol.path(holdId, key, HeldAction.UP))
+                        return false
+                    }
                     heldKeyById[holdId] = key
                     trackHeld(holdId, HeldRoad.DASH)
                     keepGate = true
@@ -344,6 +353,7 @@ class ConnectionManager(
                 if (reply is TvReply.Unreachable) {
                     setDash(false)
                     dashNudge.trySend(Unit)
+                    if (!started) return false
                     // The DOWN may have reached the TV even if its reply was lost. Keep the gate reserved and
                     // arrange a best-effort UP; never let another command race a possibly active media hold.
                     heldKeyById[holdId] = key
