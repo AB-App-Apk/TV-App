@@ -42,22 +42,26 @@ class HeldKeyWatchdogTest {
     }
 
     @Test
-    fun upDuringDownDispatchStillPairsDownWithExactlyOneUp() {
-        val downEntered = CountDownLatch(1)
-        val finishDown = CountDownLatch(1)
+    fun upCannotFinishBetweenHoldPublicationAndDownDispatch() {
+        val published = CountDownLatch(1)
+        val allowDown = CountDownLatch(1)
+        val releaseReached = CountDownLatch(1)
+        val allowRelease = CountDownLatch(1)
         val events = CopyOnWriteArrayList<String>()
         val executor = Executors.newFixedThreadPool(2)
         val watchdog = HeldKeyWatchdog(
-            onDown = { _, _ ->
-                downEntered.countDown()
-                assertTrue("test did not release DOWN callback", finishDown.await(10, TimeUnit.SECONDS))
-                events.add("down")
-                "ok"
-            },
+            onDown = { _, _ -> events.add("down"); "ok" },
             onUp = { _, _ -> events.add("up") },
-            // Use a deterministic clock: Android's SystemClock is not implemented in local JVM tests.
             uptimeMillis = { 123L },
-            watchdogTimeoutMs = 5_000L
+            watchdogTimeoutMs = 5_000L,
+            afterHoldPublished = {
+                published.countDown()
+                assertTrue("test did not release DOWN dispatch", allowDown.await(10, TimeUnit.SECONDS))
+            },
+            beforeReleaseLock = {
+                releaseReached.countDown()
+                assertTrue("test did not release UP", allowRelease.await(10, TimeUnit.SECONDS))
+            }
         )
         val id = "c0ffee00-0000-4000-8000-000000000001"
 
@@ -65,42 +69,47 @@ class HeldKeyWatchdogTest {
             val down = executor.submit<String> {
                 watchdog.handle(id, HeldRemoteKey.FORWARD, HeldAction.DOWN)
             }
-            assertTrue(downEntered.await(10, TimeUnit.SECONDS))
-            val upStarted = CountDownLatch(1)
+            assertTrue("hold was not published", published.await(10, TimeUnit.SECONDS))
             val up = executor.submit<String> {
-                upStarted.countDown()
                 watchdog.handle(id, HeldRemoteKey.FORWARD, HeldAction.UP)
             }
-            assertTrue(upStarted.await(10, TimeUnit.SECONDS))
-            finishDown.countDown()
+            assertTrue("UP did not reach the post-removal boundary", releaseReached.await(10, TimeUnit.SECONDS))
+            assertTrue("UP returned before DOWN dispatch was allowed", !up.isDone)
 
+            allowDown.countDown()
+            allowRelease.countDown()
             assertEquals("ok", down.get(10, TimeUnit.SECONDS))
             assertEquals("ok", up.get(10, TimeUnit.SECONDS))
             assertEquals(listOf("down", "up"), events)
         } finally {
-            finishDown.countDown()
+            allowDown.countDown()
+            allowRelease.countDown()
             watchdog.close()
             executor.shutdownNow()
         }
     }
 
     @Test
-    fun closeDuringDownDispatchStillPairsDownWithExactlyOneUp() {
-        val downEntered = CountDownLatch(1)
-        val finishDown = CountDownLatch(1)
+    fun closeCannotFinishBetweenHoldPublicationAndDownDispatch() {
+        val published = CountDownLatch(1)
+        val allowDown = CountDownLatch(1)
+        val releaseReached = CountDownLatch(1)
+        val allowRelease = CountDownLatch(1)
         val events = CopyOnWriteArrayList<String>()
         val executor = Executors.newFixedThreadPool(2)
         val watchdog = HeldKeyWatchdog(
-            onDown = { _, _ ->
-                downEntered.countDown()
-                assertTrue("test did not release DOWN callback", finishDown.await(10, TimeUnit.SECONDS))
-                events.add("down")
-                "ok"
-            },
+            onDown = { _, _ -> events.add("down"); "ok" },
             onUp = { _, _ -> events.add("up") },
-            // Use a deterministic clock: Android's SystemClock is not implemented in local JVM tests.
             uptimeMillis = { 123L },
-            watchdogTimeoutMs = 5_000L
+            watchdogTimeoutMs = 5_000L,
+            afterHoldPublished = {
+                published.countDown()
+                assertTrue("test did not release DOWN dispatch", allowDown.await(10, TimeUnit.SECONDS))
+            },
+            beforeReleaseLock = {
+                releaseReached.countDown()
+                assertTrue("test did not release shutdown", allowRelease.await(10, TimeUnit.SECONDS))
+            }
         )
         val id = "c0ffee00-0000-4000-8000-000000000001"
 
@@ -108,20 +117,19 @@ class HeldKeyWatchdogTest {
             val down = executor.submit<String> {
                 watchdog.handle(id, HeldRemoteKey.FORWARD, HeldAction.DOWN)
             }
-            assertTrue(downEntered.await(10, TimeUnit.SECONDS))
-            val closeStarted = CountDownLatch(1)
-            val close = executor.submit {
-                closeStarted.countDown()
-                watchdog.close()
-            }
-            assertTrue(closeStarted.await(10, TimeUnit.SECONDS))
-            finishDown.countDown()
+            assertTrue("hold was not published", published.await(10, TimeUnit.SECONDS))
+            val close = executor.submit { watchdog.close() }
+            assertTrue("shutdown did not reach hold release", releaseReached.await(10, TimeUnit.SECONDS))
+            assertTrue("shutdown returned before DOWN dispatch was allowed", !close.isDone)
 
+            allowDown.countDown()
+            allowRelease.countDown()
             assertEquals("ok", down.get(10, TimeUnit.SECONDS))
             close.get(10, TimeUnit.SECONDS)
             assertEquals(listOf("down", "up"), events)
         } finally {
-            finishDown.countDown()
+            allowDown.countDown()
+            allowRelease.countDown()
             watchdog.close()
             executor.shutdownNow()
         }
