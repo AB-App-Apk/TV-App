@@ -472,8 +472,8 @@ class BluetoothHidTransport(context: Context) : RemoteTransport {
 
     /** Releases exactly the report created by [startHeldInput]. Safe to call more than once. */
     suspend fun endHeldInput(holdId: String) {
-        val held = heldReports.remove(holdId) ?: return
         sendLock.withLock {
+            val held = heldReports.remove(holdId) ?: return@withLock
             try {
                 when (held.usage) {
                     is Usage.Key -> releaseKeyboard(held.proxy, held.device)
