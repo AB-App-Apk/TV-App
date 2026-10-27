@@ -330,6 +330,10 @@ class ConnectionManager(
                         }
                         trackHeld(holdId, HeldRoad.KEYBOARD)
                         keepGate = true
+                        if (!started) {
+                            abandonHeldStart(holdId, key, HeldRoad.KEYBOARD, lease)
+                            return false
+                        }
                         return true
                     }
                 } catch (e: IOException) {
@@ -348,6 +352,10 @@ class ConnectionManager(
                     heldKeyById[holdId] = key
                     trackHeld(holdId, HeldRoad.DASH)
                     keepGate = true
+                    if (!started) {
+                        abandonHeldStart(holdId, key, HeldRoad.DASH, lease)
+                        return false
+                    }
                     return true
                 }
                 if (reply is TvReply.Unreachable) {
@@ -359,6 +367,10 @@ class ConnectionManager(
                     heldKeyById[holdId] = key
                     trackHeld(holdId, HeldRoad.UNCERTAIN_DASH)
                     keepGate = true
+                    if (!started) {
+                        abandonHeldStart(holdId, key, HeldRoad.UNCERTAIN_DASH, lease)
+                        return false
+                    }
                     return false
                 }
                 if (reply is TvReply.Rejected) {
@@ -391,6 +403,29 @@ class ConnectionManager(
             heldInputLease.getAndSet(null)?.release()
         } else if (heldInputLease.compareAndSet(expected, null)) {
             expected.release()
+        }
+    }
+
+    /** Cleans up a DOWN that raced with stop(), without leaving a stale route or gate lease. */
+    private suspend fun abandonHeldStart(
+        holdId: String,
+        key: HeldRemoteKey,
+        road: HeldRoad,
+        lease: HeldInputGate.HoldLease
+    ) {
+        heldRenewals.remove(holdId)?.cancel()
+        heldTimeouts.remove(holdId)?.cancel()
+        heldRoutes.remove(holdId)
+        heldKeyById.remove(holdId)
+        try {
+            when (road) {
+                HeldRoad.KEYBOARD -> keyboardLink.endHeldInput(holdId)
+                HeldRoad.DASH, HeldRoad.UNCERTAIN_DASH ->
+                    link.get(HeldInputProtocol.path(holdId, key, HeldAction.UP))
+                HeldRoad.TAP -> Unit
+            }
+        } finally {
+            releaseHeldGate(lease)
         }
     }
 
