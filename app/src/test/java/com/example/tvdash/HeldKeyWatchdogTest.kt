@@ -55,6 +55,8 @@ class HeldKeyWatchdogTest {
                 "ok"
             },
             onUp = { _, _ -> events.add("up") },
+            // Use a deterministic clock: Android's SystemClock is not implemented in local JVM tests.
+            uptimeMillis = { 123L },
             watchdogTimeoutMs = 5_000L
         )
         val id = "c0ffee00-0000-4000-8000-000000000001"
@@ -96,6 +98,8 @@ class HeldKeyWatchdogTest {
                 "ok"
             },
             onUp = { _, _ -> events.add("up") },
+            // Use a deterministic clock: Android's SystemClock is not implemented in local JVM tests.
+            uptimeMillis = { 123L },
             watchdogTimeoutMs = 5_000L
         )
         val id = "c0ffee00-0000-4000-8000-000000000001"
