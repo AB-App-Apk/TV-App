@@ -23,7 +23,9 @@ internal class HeldKeyWatchdog(
     private val uptimeMillis: () -> Long = { SystemClock.uptimeMillis() },
     private val watchdogTimeoutMs: Long = HeldInputProtocol.WATCHDOG_TIMEOUT_MS,
     /** Test seam for coordinating the registration-to-dispatch race; production default is a no-op. */
-    private val afterHoldPublished: (String) -> Unit = {}
+    private val afterHoldPublished: (String) -> Unit = {},
+    /** Test seam called after a hold leaves the active map but before release acquires its lock. */
+    private val beforeReleaseLock: (String) -> Unit = {}
 ) : AutoCloseable {
     private companion object {
         const val MAX_ACTIVE_HOLDS = 8
@@ -136,6 +138,7 @@ internal class HeldKeyWatchdog(
 
     private fun release(holdId: String) {
         val hold = active.remove(holdId) ?: return
+        beforeReleaseLock(holdId)
         synchronized(hold) {
             hold.timeout?.cancel()
             hold.timeout = null
