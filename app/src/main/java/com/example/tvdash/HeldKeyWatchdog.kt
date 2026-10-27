@@ -21,7 +21,9 @@ internal class HeldKeyWatchdog(
     private val onDown: (HeldRemoteKey, Long) -> String,
     private val onUp: (HeldRemoteKey, Long) -> Unit,
     private val uptimeMillis: () -> Long = { SystemClock.uptimeMillis() },
-    private val watchdogTimeoutMs: Long = HeldInputProtocol.WATCHDOG_TIMEOUT_MS
+    private val watchdogTimeoutMs: Long = HeldInputProtocol.WATCHDOG_TIMEOUT_MS,
+    /** Test seam for coordinating the registration-to-dispatch race; production default is a no-op. */
+    private val afterHoldPublished: (String) -> Unit = {}
 ) : AutoCloseable {
     private companion object {
         const val MAX_ACTIVE_HOLDS = 8
@@ -73,6 +75,10 @@ internal class HeldKeyWatchdog(
                 if (active.size >= MAX_ACTIVE_HOLDS) return "busy"
                 active[holdId] = hold
             }
+
+            // Still inside synchronized(hold): a concurrent UP/close may remove the map entry,
+            // but cannot observe downDelivered=false and return until DOWN has been dispatched.
+            afterHoldPublished(holdId)
 
             val result = try {
                 onDown(key, hold.downTime)
