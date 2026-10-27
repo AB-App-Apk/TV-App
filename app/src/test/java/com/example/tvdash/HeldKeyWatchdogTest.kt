@@ -16,7 +16,7 @@ class HeldKeyWatchdogTest {
         val ups = CopyOnWriteArrayList<Pair<HeldRemoteKey, Long>>()
         val watchdog = HeldKeyWatchdog(
             onDown = { key, downTime -> downs.add(key to downTime); "ok" },
-            onUp = { key, downTime -> ups.add(key to downTime },
+            onUp = { key, downTime -> ups.add(key to downTime) },
             uptimeMillis = { 123L },
             watchdogTimeoutMs = 400L
         )
