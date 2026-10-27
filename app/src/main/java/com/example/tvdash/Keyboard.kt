@@ -106,5 +106,6 @@ class RemoteKeyboardService : InputMethodService() {
             // Already running: suppress a second typing route.
             true
         }
-    }
+     }
+   }
 }
