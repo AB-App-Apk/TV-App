@@ -8,6 +8,10 @@ import android.net.NetworkRequest
 import android.net.Uri
 import android.os.SystemClock
 import android.util.Log
+import com.example.tvlink.HeldAction
+import com.example.tvlink.HeldInputProtocol
+import com.example.tvlink.HeldRemoteKey
+import java.util.concurrent.ConcurrentHashMap
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -192,6 +196,10 @@ class ConnectionManager(
     private val sendLock = Mutex()
     private val buffer = ArrayDeque<Pending>()
 
+    private enum class HeldRoad { KEYBOARD, DASH }
+
+    private val heldRoutes = ConcurrentHashMap<String, HeldRoad>()
+
     /** Typing requests are handled one at a time, in order. Everything below that touches the session holds this lock. */
     private val keyboardLock = Mutex()
     private var heldKeyboard: HeldPayload? = null
@@ -276,6 +284,63 @@ class ConnectionManager(
         dashNudge.trySend(Unit)
         keyboardNudge.trySend(Unit)
     }
+
+    // ---------------------------------------------------------------- held buttons
+
+    /**
+     * Starts a real key-down report on Bluetooth HID when possible. The TV Dash endpoint is only a fallback
+     * for media keys, because AccessibilityService cannot inject arbitrary held Back/OK KeyEvents.
+     */
+    suspend fun beginHeldInput(holdId: String, key: HeldRemoteKey): Boolean {
+        if (!HeldInputProtocol.isValidHoldId(holdId)) return false
+        if (heldRoutes.containsKey(holdId)) return true
+
+        if (keysUp) {
+            try {
+                if (keyboardLink.startHeldInput(holdId, key)) {
+                    heldRoutes[holdId] = HeldRoad.KEYBOARD
+                    return true
+                }
+            } catch (e: IOException) {
+                Log.w(TAG, "Bluetooth held-key start failed: ${e.message}")
+                setKeys(false)
+            }
+        }
+
+        if (key == HeldRemoteKey.FORWARD || key == HeldRemoteKey.REWIND) {
+            val reply = link.get(HeldInputProtocol.path(holdId, key, HeldAction.DOWN))
+            if (reply is TvReply.Ok && reply.body.trim() == RemoteStatus.OK) {
+                heldRoutes[holdId] = HeldRoad.DASH
+                heldKeyById[holdId] = key
+                return true
+            }
+            if (reply is TvReply.Unreachable) {
+                setDash(false)
+                dashNudge.trySend(Unit)
+            }
+        }
+        return false
+    }
+
+    /** Ends the exact route chosen by [beginHeldInput]; duplicate UPs are harmless. */
+    suspend fun endHeldInput(holdId: String) {
+        when (heldRoutes.remove(holdId)) {
+            HeldRoad.KEYBOARD -> keyboardLink.endHeldInput(holdId)
+            HeldRoad.DASH -> {
+                val key = if (holdId.isNotEmpty()) {
+                    // The TV stores the key against this identifier, so an UP needs only the matching identifier.
+                    // Its endpoint validates the other fields as part of the shared wire protocol.
+                    heldKeyById.remove(holdId)
+                } else null
+                if (key != null) {
+                    link.get(HeldInputProtocol.path(holdId, key, HeldAction.UP))
+                }
+            }
+            null -> Unit
+        }
+    }
+
+    private val heldKeyById = ConcurrentHashMap<String, HeldRemoteKey>()
 
     // ---------------------------------------------------------------- buttons
 
