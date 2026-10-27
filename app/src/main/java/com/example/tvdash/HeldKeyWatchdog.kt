@@ -36,7 +36,10 @@ internal class HeldKeyWatchdog(
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val active = ConcurrentHashMap<String, ActiveHold>()
 
+    @Volatile private var closed = false
+
     fun handle(holdId: String, key: HeldRemoteKey, action: HeldAction): String {
+        if (closed) return "closed"
         if (!HeldInputProtocol.isValidHoldId(holdId)) return "bad-hold"
         return when (action) {
             HeldAction.DOWN -> start(holdId, key)
@@ -55,6 +58,7 @@ internal class HeldKeyWatchdog(
     private fun start(holdId: String, key: HeldRemoteKey): String {
         val hold = ActiveHold(key, SystemClock.uptimeMillis())
         synchronized(active) {
+            if (closed) return "closed"
             active[holdId]?.let { existing ->
                 return if (existing.key == key) "ok" else "bad-hold"
             }
@@ -100,6 +104,7 @@ internal class HeldKeyWatchdog(
     }
 
     override fun close() {
+        closed = true
         active.keys.toList().forEach(::release)
         scope.cancel()
     }
