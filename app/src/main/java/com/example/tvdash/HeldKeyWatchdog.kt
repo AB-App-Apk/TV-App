@@ -53,14 +53,14 @@ internal class HeldKeyWatchdog(
     }
 
     private fun start(holdId: String, key: HeldRemoteKey): String {
-        active[holdId]?.let { existing ->
-            return if (existing.key == key) "ok" else "bad-hold"
-        }
-        if (active.size >= MAX_ACTIVE_HOLDS) return "busy"
-
         val hold = ActiveHold(key, SystemClock.uptimeMillis())
-        val existing = active.putIfAbsent(holdId, hold)
-        if (existing != null) return if (existing.key == key) "ok" else "bad-hold"
+        synchronized(active) {
+            active[holdId]?.let { existing ->
+                return if (existing.key == key) "ok" else "bad-hold"
+            }
+            if (active.size >= MAX_ACTIVE_HOLDS) return "busy"
+            active[holdId] = hold
+        }
 
         synchronized(hold) {
             val result = try {
