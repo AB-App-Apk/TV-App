@@ -383,7 +383,9 @@ class ConnectionManager(
             while (isActive && heldRoutes[holdId] == road) {
                 delay(HeldInputProtocol.LEASE_RENEW_INTERVAL_MS)
                 if (!isActive || heldRoutes[holdId] != road) break
-                if (!renewHeld(holdId, road)) break
+                // A single lost renewal is not terminal: retry while the hold is still active. The independent
+                // timeout ends the route if no renewal succeeds before the last lease expires.
+                renewHeld(holdId, road)
             }
         }
     }
