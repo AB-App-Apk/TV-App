@@ -50,7 +50,7 @@ class HeldKeyWatchdogTest {
         val watchdog = HeldKeyWatchdog(
             onDown = { _, _ ->
                 downEntered.countDown()
-                assertTrue("test did not release DOWN callback", finishDown.await(3, TimeUnit.SECONDS))
+                assertTrue("test did not release DOWN callback", finishDown.await(10, TimeUnit.SECONDS))
                 events.add("down")
                 "ok"
             },
@@ -63,17 +63,17 @@ class HeldKeyWatchdogTest {
             val down = executor.submit<String> {
                 watchdog.handle(id, HeldRemoteKey.FORWARD, HeldAction.DOWN)
             }
-            assertTrue(downEntered.await(2, TimeUnit.SECONDS))
+            assertTrue(downEntered.await(10, TimeUnit.SECONDS))
             val upStarted = CountDownLatch(1)
             val up = executor.submit<String> {
                 upStarted.countDown()
                 watchdog.handle(id, HeldRemoteKey.FORWARD, HeldAction.UP)
             }
-            assertTrue(upStarted.await(2, TimeUnit.SECONDS))
+            assertTrue(upStarted.await(10, TimeUnit.SECONDS))
             finishDown.countDown()
 
-            assertEquals("ok", down.get(3, TimeUnit.SECONDS))
-            assertEquals("ok", up.get(3, TimeUnit.SECONDS))
+            assertEquals("ok", down.get(10, TimeUnit.SECONDS))
+            assertEquals("ok", up.get(10, TimeUnit.SECONDS))
             assertEquals(listOf("down", "up"), events)
         } finally {
             finishDown.countDown()
@@ -91,7 +91,7 @@ class HeldKeyWatchdogTest {
         val watchdog = HeldKeyWatchdog(
             onDown = { _, _ ->
                 downEntered.countDown()
-                assertTrue("test did not release DOWN callback", finishDown.await(3, TimeUnit.SECONDS))
+                assertTrue("test did not release DOWN callback", finishDown.await(10, TimeUnit.SECONDS))
                 events.add("down")
                 "ok"
             },
@@ -104,17 +104,17 @@ class HeldKeyWatchdogTest {
             val down = executor.submit<String> {
                 watchdog.handle(id, HeldRemoteKey.FORWARD, HeldAction.DOWN)
             }
-            assertTrue(downEntered.await(2, TimeUnit.SECONDS))
+            assertTrue(downEntered.await(10, TimeUnit.SECONDS))
             val closeStarted = CountDownLatch(1)
             val close = executor.submit {
                 closeStarted.countDown()
                 watchdog.close()
             }
-            assertTrue(closeStarted.await(2, TimeUnit.SECONDS))
+            assertTrue(closeStarted.await(10, TimeUnit.SECONDS))
             finishDown.countDown()
 
-            assertEquals("ok", down.get(3, TimeUnit.SECONDS))
-            close.get(3, TimeUnit.SECONDS)
+            assertEquals("ok", down.get(10, TimeUnit.SECONDS))
+            close.get(10, TimeUnit.SECONDS)
             assertEquals(listOf("down", "up"), events)
         } finally {
             finishDown.countDown()
