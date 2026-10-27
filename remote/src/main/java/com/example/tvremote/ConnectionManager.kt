@@ -202,6 +202,7 @@ class ConnectionManager(
 
     private val heldRoutes = ConcurrentHashMap<String, HeldRoad>()
     private val heldTimeouts = ConcurrentHashMap<String, Job>()
+    private val heldRenewals = ConcurrentHashMap<String, Job>()
 
     /** Typing requests are handled one at a time, in order. Everything below that touches the session holds this lock. */
     private val keyboardLock = Mutex()
@@ -266,6 +267,7 @@ class ConnectionManager(
         heldRoutes.clear()
         heldKeyById.clear()
         heldTimeouts.clear()
+        heldRenewals.clear()
         keyboardLink.release()
         dashUp = false
         keysUp = false
@@ -355,6 +357,7 @@ class ConnectionManager(
     }
 
     private suspend fun endHeldInput(holdId: String, fromWatchdog: Boolean) {
+        heldRenewals.remove(holdId)?.cancel()
         val timeout = heldTimeouts.remove(holdId)
         if (!fromWatchdog) timeout?.cancel()
         when (heldRoutes.remove(holdId)) {
@@ -371,10 +374,61 @@ class ConnectionManager(
 
     private fun trackHeld(holdId: String, road: HeldRoad) {
         heldRoutes[holdId] = road
-        heldTimeouts[holdId] = scope.launch {
-            delay(HeldInputProtocol.WATCHDOG_TIMEOUT_MS)
-            endHeldInput(holdId, fromWatchdog = true)
+        scheduleHeldTimeout(holdId)
+
+        // The lease is renewed only while the captured touch remains active. If renewal stops, the independent
+        // timeout still releases the phone-side hold; the TV has its own matching four-second network watchdog.
+        if (road == HeldRoad.TAP) return
+        heldRenewals[holdId] = scope.launch {
+            while (isActive && heldRoutes[holdId] == road) {
+                delay(HeldInputProtocol.LEASE_RENEW_INTERVAL_MS)
+                if (!isActive || heldRoutes[holdId] != road) break
+                // A single lost renewal is not terminal: retry while the hold is still active. The independent
+                // timeout ends the route if no renewal succeeds before the last lease expires.
+                renewHeld(holdId, road)
+            }
         }
+    }
+
+    private suspend fun renewHeld(holdId: String, road: HeldRoad): Boolean {
+        if (heldRoutes[holdId] != road) return false
+        return when (road) {
+            HeldRoad.KEYBOARD -> {
+                if (!keysUp) {
+                    false
+                } else {
+                    scheduleHeldTimeout(holdId)
+                    true
+                }
+            }
+            HeldRoad.DASH -> {
+                val key = heldKeyById[holdId] ?: return false
+                val reply = link.get(HeldInputProtocol.path(holdId, key, HeldAction.RENEW))
+                if (reply is TvReply.Ok && reply.body.trim() == RemoteStatus.OK) {
+                    scheduleHeldTimeout(holdId)
+                    true
+                } else {
+                    if (reply is TvReply.Unreachable) {
+                        setDash(false)
+                        dashNudge.trySend(Unit)
+                    }
+                    false
+                }
+            }
+            HeldRoad.TAP -> false
+        }
+    }
+
+    /** Reschedules the independent phone-side safety deadline after a successful lease renewal. */
+    private fun scheduleHeldTimeout(holdId: String) {
+        lateinit var timeout: Job
+        timeout = scope.launch {
+            delay(HeldInputProtocol.WATCHDOG_TIMEOUT_MS)
+            if (heldTimeouts[holdId] === timeout) {
+                endHeldInput(holdId, fromWatchdog = true)
+            }
+        }
+        heldTimeouts.put(holdId, timeout)?.cancel()
     }
 
     private val heldKeyById = ConcurrentHashMap<String, HeldRemoteKey>()
