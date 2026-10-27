@@ -258,7 +258,8 @@ class RemoteService : Service() {
                 "unsupported"
             } else {
                 val event = KeyEvent(downTime, downTime, KeyEvent.ACTION_DOWN, keyCode, 0)
-                if (getSystemService(AudioManager::class.java).dispatchMediaKeyEvent(event)) "ok" else "unsupported"
+                getSystemService(AudioManager::class.java).dispatchMediaKeyEvent(event)
+                "ok"
             }
         },
         onUp = { key, downTime ->
