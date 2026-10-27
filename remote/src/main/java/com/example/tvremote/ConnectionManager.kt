@@ -324,10 +324,16 @@ class ConnectionManager(
             if (reply is TvReply.Unreachable) {
                 setDash(false)
                 dashNudge.trySend(Unit)
+                // The DOWN may have reached the TV even if its reply was lost; do not risk a duplicate press.
+                return false
+            }
+            if (reply is TvReply.Rejected) {
+                noteDashRejected(reply.http)
+                return false
             }
         }
 
-        // If a native hold is unavailable, preserve the existing one-shot tap rather than swallowing touch input.
+        // If a native hold is explicitly unsupported, preserve the existing one-shot tap rather than swallowing touch input.
         // Back and OK use accessibility only for this tap fallback; Fast Forward/Rewind use TV Dash's existing route.
         val command = when (key) {
             HeldRemoteKey.BACK -> RemoteCommand.BACK
