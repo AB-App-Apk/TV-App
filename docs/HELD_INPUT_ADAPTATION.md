@@ -13,8 +13,9 @@
 1. Compose creates one UUID per touch and sends one DOWN callback.
 2. The ViewModel serializes UP behind the corresponding DOWN job.
 3. ConnectionManager chooses one route for that hold. Bluetooth HID is preferred for all four keys. The TV Dash network endpoint is only a fallback for Fast Forward and Rewind.
-4. TV Dash keeps active network holds in a concurrent map and schedules an automatic UP after 4 seconds.
-5. A user UP, gesture cancellation, TV service shutdown, or the watchdog releases the hold. Duplicate UP requests are idempotent.
+4. TV Dash keeps active network holds in a concurrent map and schedules an automatic UP when its four-second safety lease expires.
+5. While the touch remains down, the phone renews the lease every second; renewal refreshes the TV watchdog without sending a second DOWN.
+6. A user UP, gesture cancellation, phone/service interruption, or the watchdog releases the hold. Duplicate UP requests are idempotent.
 
 ## Platform limitation
 
@@ -33,7 +34,8 @@ The phone's existing Bluetooth setup still requests its required Nearby devices 
 - [ ] Tap Back and OK with Bluetooth HID connected: one action, no duplicate tap.
 - [ ] Hold Back and OK: HID report stays down until finger-up; cancellation also releases.
 - [ ] Hold Fast Forward and Rewind: verify the TV/player actually repeats/continues seeking.
-- [ ] Drop the network after a media DOWN: watchdog sends UP no later than 4 seconds after TV receives DOWN.
+- [ ] Hold Fast Forward/Rewind longer than 4 seconds: lease renewals keep the key down until UP.
+- [ ] Drop the network after a media DOWN: TV sends UP no later than 4 seconds after the last successful lease renewal.
 - [ ] Send duplicate UP: no crash and no second release.
 - [ ] Send UP with a mismatched key ID: TV rejects it.
 - [ ] Disconnect Bluetooth while a key is held: Android releases the HID device state and the app clears its hold records.
