@@ -24,7 +24,9 @@ The network watchdog supports native media-key DOWN/UP for Fast Forward and Rewi
 
 ## Permission/onboarding adaptation
 
-No duplicate permission overlay was added. The phone's current Bluetooth setup already requests Nearby devices where required, and the TV's existing setup guides the user to enable TV Dash in Accessibility settings. Held input does not require browser/OAuth, local-network runtime permission, or Bluetooth scan on the TV.
+The TV app now rechecks `BLUETOOTH_CONNECT` in `onResume` and shows a D-pad-friendly full-screen rationale before requesting it. A prior-request marker distinguishes a normal denial from a likely permanent denial; the latter offers the app-details settings screen. The overlay can be dismissed to continue Wi-Fi-only. The TV server needs `BLUETOOTH_CONNECT` for its RFCOMM listener, not `BLUETOOTH_SCAN`; no new manifest permission was added.
+
+The phone's existing Bluetooth setup still requests its required Nearby devices permissions through `RequestMultiplePermissions`. The TV's existing accessibility setup remains user-enabled in system settings. Held input does not require browser/OAuth or a local-network runtime permission.
 
 ## Manual acceptance checklist
 
