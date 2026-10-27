@@ -104,7 +104,9 @@ internal class HeldKeyWatchdog(
     }
 
     override fun close() {
-        closed = true
+        synchronized(active) {
+            closed = true
+        }
         active.keys.toList().forEach(::release)
         scope.cancel()
     }
