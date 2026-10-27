@@ -42,8 +42,12 @@ object ConnectionInput {
                 InputCheck.Invalid("Enter the PIN shown on the TV.", ipWrong = false, pinWrong = true)
             !isIpv4(host) ->
                 InputCheck.Invalid("The IP address should look like 192.168.1.20.", ipWrong = true, pinWrong = false)
-            !pin.all { it.isDigit() } ->
-                InputCheck.Invalid("The PIN is numbers only.", ipWrong = false, pinWrong = true)
+            !Regex("[0-9]{4}").matches(pin) ->
+                InputCheck.Invalid(
+                    "The PIN must be the four digits shown on the TV.",
+                    ipWrong = false,
+                    pinWrong = true
+                )
             else -> InputCheck.Valid(host, pin)
         }
     }
