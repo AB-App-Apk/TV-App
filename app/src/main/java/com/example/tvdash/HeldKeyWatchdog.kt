@@ -14,8 +14,8 @@ import kotlinx.coroutines.launch
 import java.util.concurrent.ConcurrentHashMap
 
 /**
- * Owns network-originated held keys. Every DOWN is paired with an UP either from the phone or after four seconds.
- * The callback functions are deliberately injected so this class does not depend on Android key-injection APIs.
+ * Owns network-originated held keys. Every DOWN is paired with an UP from the phone or when its renewable
+ * four-second safety lease expires. The callbacks are injected so this class does not depend on Android key APIs.
  */
 internal class HeldKeyWatchdog(
     private val onDown: (HeldRemoteKey, Long) -> String,
