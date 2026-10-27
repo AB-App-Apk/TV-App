@@ -417,7 +417,7 @@ class ConnectionManager(
                     HeldRoad.TAP -> Unit
                 }
             } finally {
-                if (road == HeldRoad.KEYBOARD || road == HeldRoad.DASH) releaseHeldGate()
+                if (road == HeldRoad.KEYBOARD || road == HeldRoad.DASH || road == HeldRoad.UNCERTAIN_DASH) releaseHeldGate()
             }
         }
     }
