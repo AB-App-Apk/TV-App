@@ -239,6 +239,7 @@ class BluetoothHidTransport(context: Context) : RemoteTransport {
             registered = false
             attaching = false
             connectedAddress = null
+            heldReports.clear()
             state.value = ConnectionState.DISCONNECTED
         }
     }
@@ -247,7 +248,10 @@ class BluetoothHidTransport(context: Context) : RemoteTransport {
         object : BluetoothHidDevice.Callback() {
             override fun onAppStatusChanged(pluggedDevice: BluetoothDevice?, registered: Boolean) {
                 this@BluetoothHidTransport.registered = registered
-                if (!registered) state.value = ConnectionState.DISCONNECTED
+                if (!registered) {
+                    heldReports.clear()
+                    state.value = ConnectionState.DISCONNECTED
+                }
             }
 
             override fun onConnectionStateChanged(device: BluetoothDevice, newState: Int) {
@@ -261,6 +265,7 @@ class BluetoothHidTransport(context: Context) : RemoteTransport {
                     else -> {
                         connectedAddress = null
                         bootProtocol = false
+                        heldReports.clear()
                         state.value = ConnectionState.DISCONNECTED
                     }
                 }
@@ -305,6 +310,7 @@ class BluetoothHidTransport(context: Context) : RemoteTransport {
             override fun onVirtualCableUnplug(device: BluetoothDevice) {
                 connectedAddress = null
                 bootProtocol = false
+                heldReports.clear()
                 state.value = ConnectionState.DISCONNECTED
             }
         }
@@ -355,6 +361,7 @@ class BluetoothHidTransport(context: Context) : RemoteTransport {
         attaching = false
         connectedAddress = null
         bootProtocol = false
+        heldReports.clear()
         state.value = ConnectionState.DISCONNECTED
     }
 
@@ -444,6 +451,7 @@ class BluetoothHidTransport(context: Context) : RemoteTransport {
         }
         return sendLock.withLock {
             if (heldReports.containsKey(holdId)) return@withLock true
+            if (heldReports.isNotEmpty()) return@withLock false
             try {
                 when (usage) {
                     is Usage.Key -> sendKeyboard(proxy, device, usage.modifiers, usage.code)
