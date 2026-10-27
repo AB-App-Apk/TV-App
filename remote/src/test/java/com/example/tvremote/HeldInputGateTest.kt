@@ -1,6 +1,7 @@
 package com.example.tvremote
 
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.async
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.yield
@@ -15,7 +16,7 @@ class HeldInputGateTest {
         val gate = HeldInputGate()
         val lease = gate.acquireHold()
         val entered = CompletableDeferred<Unit>()
-        val command = launch {
+        val command = async {
             gate.withInput {
                 entered.complete(Unit)
                 "sent"
