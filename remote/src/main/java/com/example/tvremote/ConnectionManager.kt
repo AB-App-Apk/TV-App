@@ -324,12 +324,16 @@ class ConnectionManager(
                 setDash(false)
                 dashNudge.trySend(Unit)
             }
-            return false
         }
 
-        // Back and OK cannot be held through AccessibilityService. Preserve their existing one-shot behavior
-        // when HID is unavailable instead of swallowing a touch tap.
-        val command = if (key == HeldRemoteKey.BACK) RemoteCommand.BACK else RemoteCommand.OK
+        // If a native hold is unavailable, preserve the existing one-shot tap rather than swallowing touch input.
+        // Back and OK use accessibility only for this tap fallback; Fast Forward/Rewind use TV Dash's existing route.
+        val command = when (key) {
+            HeldRemoteKey.BACK -> RemoteCommand.BACK
+            HeldRemoteKey.OK -> RemoteCommand.OK
+            HeldRemoteKey.FORWARD -> RemoteCommand.FORWARD
+            HeldRemoteKey.REWIND -> RemoteCommand.REWIND
+        }
         val result = (sendRemoteCommand(command) as? DeliveryResult.Delivered)?.reply
         if (result == RemoteStatus.OK || result == RemoteStatus.QUEUED) {
             trackHeld(holdId, HeldRoad.TAP)
