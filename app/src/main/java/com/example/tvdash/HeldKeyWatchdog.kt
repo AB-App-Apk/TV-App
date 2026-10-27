@@ -41,8 +41,13 @@ internal class HeldKeyWatchdog(
         return when (action) {
             HeldAction.DOWN -> start(holdId, key)
             HeldAction.UP -> {
-                release(holdId)
-                "ok"
+                val existing = active[holdId]
+                if (existing != null && existing.key != key) {
+                    "bad-hold"
+                } else {
+                    release(holdId)
+                    "ok"
+                }
             }
         }
     }
