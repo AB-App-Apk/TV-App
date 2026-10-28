@@ -26,6 +26,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.tvlink.TvTls
 import com.example.updater.UpdateController
 import kotlinx.coroutines.CoroutineScope
@@ -182,6 +183,14 @@ fun RemoteApp(graph: RemoteGraph, viewModel: RemoteViewModel) {
             msg = ""
         }
     }
+
+val linkState by graph.connection.state.collectAsStateWithLifecycle()
+LaunchedEffect(linkState) {
+    if (linkState !== RemoteConnectionState.Disconnected) {
+        msg = ""
+        if (setupComplete && !changingTv && apps.isEmpty()) loadApps()
+    }
+}
 
     /** The last step: the TV must answer this address and PIN over the verified, encrypted link. */
     suspend fun finishWithIp(tvHost: String, tvPin: String, tvMac: String, fingerprint: String) {
