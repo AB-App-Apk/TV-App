@@ -133,6 +133,7 @@ class HeldKeyWatchdogTest {
         val executor = Executors.newFixedThreadPool(2)
         val watchdog = HeldKeyWatchdog(
             onDown = { _, _ -> events.add("down"); "ok" },
+            onRepeat = { _, _, _ -> },
             onUp = { _, _ -> events.add("up") },
             uptimeMillis = { 123L },
             watchdogTimeoutMs = 5_000L,
