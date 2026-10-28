@@ -17,7 +17,7 @@
 5. While the touch remains down, the phone renews the lease every second; renewal refreshes the TV watchdog without sending a second DOWN.
 6. For network-held Fast Forward and Rewind, the TV independently emits repeated media-key ACTION_DOWN events after a 500 ms initial delay and then every 250 ms. Each repeat has an increasing repeat count; lease renewal does not reset the repeat cadence.
 7. A user UP, gesture cancellation, phone/service interruption, or the watchdog releases the hold and cancels repeat generation. Duplicate UP requests are idempotent.
-7. The phone's input gate stays reserved from before DOWN until the matching UP/release path finishes. Ordinary button commands and text payloads wait behind a real hold, so they cannot send a conflicting HID report or a competing TV Dash media tap. One-shot fallback taps release the gate before using the ordinary command path.
+8. The phone's input gate stays reserved from before DOWN until the matching UP/release path finishes. Ordinary button commands and text payloads wait behind a real hold, so they cannot send a conflicting HID report or a competing TV Dash media tap. One-shot fallback taps release the gate before using the ordinary command path.
 
 ## Platform limitation
 
