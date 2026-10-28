@@ -434,7 +434,13 @@ private fun DirectionPad(viewModel: RemoteViewModel) {
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
-        DKey(Ico.Up) { viewModel.onDpadUp() }
+        DKey(
+            Ico.Up,
+            modifier = Modifier.heldRemoteInput(
+                HeldRemoteKey.UP,
+                viewModel::onHeldInputDown
+            ) { _, holdId -> viewModel.onHeldInputUp(holdId) }
+        ) { viewModel.onDpadUp() }
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
             DKey(Ico.Left) { viewModel.onDpadLeft() }
             FitButton(
@@ -449,7 +455,13 @@ private fun DirectionPad(viewModel: RemoteViewModel) {
             )
             DKey(Ico.Right) { viewModel.onDpadRight() }
         }
-        DKey(Ico.Down) { viewModel.onDpadDown() }
+        DKey(
+            Ico.Down,
+            modifier = Modifier.heldRemoteInput(
+                HeldRemoteKey.DOWN,
+                viewModel::onHeldInputDown
+            ) { _, holdId -> viewModel.onHeldInputUp(holdId) }
+        ) { viewModel.onDpadDown() }
     }
 }
 
