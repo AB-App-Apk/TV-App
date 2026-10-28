@@ -108,14 +108,16 @@ class PowerAccessibilityService : AccessibilityService() {
      * Attempts a real accessibility long-click on the currently focused TV UI node.
      * Returns false when the app/firmware does not expose a focused node with long-click support.
      */
-    fun performFocusedLongClick(): Boolean = try {
-        val root = rootInActiveWindow ?: return false
-        val focused = root.findFocus(AccessibilityNodeInfo.FOCUS_ACCESSIBILITY)
-            ?: findViewFocusedNode(root, 0)
-        focused?.performAction(AccessibilityNodeInfo.ACTION_LONG_CLICK) == true
-    } catch (t: Throwable) {
-        Log.w(TAG, "focused long-click failed", t)
-        false
+    fun performFocusedLongClick(): Boolean {
+        return try {
+            val root = rootInActiveWindow ?: return false
+            val focused = root.findFocus(AccessibilityNodeInfo.FOCUS_ACCESSIBILITY)
+                ?: findViewFocusedNode(root, 0)
+            focused?.performAction(AccessibilityNodeInfo.ACTION_LONG_CLICK) == true
+        } catch (t: Throwable) {
+            Log.w(TAG, "focused long-click failed", t)
+            false
+        }
     }
 
     private fun findViewFocusedNode(node: AccessibilityNodeInfo, depth: Int): AccessibilityNodeInfo? {
