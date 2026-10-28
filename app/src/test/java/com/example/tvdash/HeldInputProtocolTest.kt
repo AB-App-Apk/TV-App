@@ -33,6 +33,11 @@ class HeldInputProtocolTest {
             "hold?id=$id&key=ff&action=up",
             HeldInputProtocol.path(id, HeldRemoteKey.FORWARD, HeldAction.UP)
         )
+        assertEquals(
+            "hold?id=$id&key=back&action=cancel",
+            HeldInputProtocol.path(id, HeldRemoteKey.BACK, HeldAction.CANCEL)
+        )
         assertEquals(HeldAction.RENEW, HeldAction.fromWire("renew"))
+        assertEquals(HeldAction.CANCEL, HeldAction.fromWire("cancel"))
     }
 }
