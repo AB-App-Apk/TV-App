@@ -21,10 +21,15 @@ internal class HeldKeyWatchdog(
     private val onDown: (HeldRemoteKey, Long) -> String,
     private val onRepeat: (HeldRemoteKey, Long, Int) -> Unit,
     private val onUp: (HeldRemoteKey, Long) -> Unit,
+    /** Runs for a short Back/OK press only after a normal finger-up. */
+    private val onTap: (HeldRemoteKey) -> Unit = {},
+    /** Runs once at the long-press threshold for Back/OK; it must not synthesize repeat events. */
+    private val onLongPress: (HeldRemoteKey) -> Unit = {},
     private val uptimeMillis: () -> Long = { SystemClock.uptimeMillis() },
     private val watchdogTimeoutMs: Long = HeldInputProtocol.WATCHDOG_TIMEOUT_MS,
     private val repeatInitialDelayMs: Long = DEFAULT_REPEAT_INITIAL_DELAY_MS,
     private val repeatIntervalMs: Long = DEFAULT_REPEAT_INTERVAL_MS,
+    private val longPressDelayMs: Long = DEFAULT_LONG_PRESS_DELAY_MS,
     /** Test seam for coordinating the registration-to-dispatch race; production default is a no-op. */
     private val afterHoldPublished: (String) -> Unit = {},
     /** Test seam called after a hold leaves the active map but before release acquires its lock. */
@@ -34,6 +39,7 @@ internal class HeldKeyWatchdog(
         const val MAX_ACTIVE_HOLDS = 8
         const val DEFAULT_REPEAT_INITIAL_DELAY_MS = 500L
         const val DEFAULT_REPEAT_INTERVAL_MS = 250L
+        const val DEFAULT_LONG_PRESS_DELAY_MS = 500L
     }
 
     private class ActiveHold(
@@ -42,6 +48,8 @@ internal class HeldKeyWatchdog(
     ) {
         @Volatile var timeout: Job? = null
         var repeatJob: Job? = null
+        var longPressJob: Job? = null
+        var longPressDelivered: Boolean = false
         var repeatCount: Int = 0
         var downDelivered: Boolean = false
     }
@@ -57,12 +65,12 @@ internal class HeldKeyWatchdog(
         return when (action) {
             HeldAction.DOWN -> start(holdId, key)
             HeldAction.RENEW -> renew(holdId, key)
-            HeldAction.UP -> {
+            HeldAction.UP, HeldAction.CANCEL -> {
                 val existing = active[holdId]
                 if (existing != null && existing.key != key) {
                     "bad-hold"
                 } else {
-                    release(holdId)
+                    release(holdId, cancelled = action == HeldAction.CANCEL)
                     "ok"
                 }
             }
@@ -104,6 +112,8 @@ internal class HeldKeyWatchdog(
             scheduleTimeout(holdId, hold)
             if (isRepeatable(key)) {
                 scheduleRepeats(holdId, hold)
+            } else if (isLongPressKey(key)) {
+                scheduleLongPress(holdId, hold)
             }
         }
         return "ok"
@@ -133,6 +143,8 @@ internal class HeldKeyWatchdog(
                     hold.timeout = null
                     hold.repeatJob?.cancel()
                     hold.repeatJob = null
+                    hold.longPressJob?.cancel()
+                    hold.longPressJob = null
                     shouldRelease = hold.downDelivered
                     hold.downDelivered = false
                 }
@@ -155,6 +167,29 @@ internal class HeldKeyWatchdog(
     private fun isRepeatable(key: HeldRemoteKey): Boolean =
         key == HeldRemoteKey.FORWARD || key == HeldRemoteKey.REWIND ||
             key == HeldRemoteKey.UP || key == HeldRemoteKey.DOWN
+
+    private fun isLongPressKey(key: HeldRemoteKey): Boolean =
+        key == HeldRemoteKey.BACK || key == HeldRemoteKey.OK
+
+    /**
+     * Accessibility cannot expose a held Back/OK KeyEvent. Wait for a deliberate hold, then issue one
+     * long-press action; a normal release before this threshold becomes exactly one ordinary tap.
+     */
+    private fun scheduleLongPress(holdId: String, hold: ActiveHold) {
+        hold.longPressJob?.cancel()
+        hold.longPressJob = scope.launch {
+            delay(longPressDelayMs)
+            synchronized(hold) {
+                if (closed || active[holdId] !== hold || !hold.downDelivered || hold.longPressDelivered) return@synchronized
+                hold.longPressDelivered = true
+                try {
+                    onLongPress(hold.key)
+                } catch (_: Exception) {
+                    // The hold still owns its lifecycle; a failed accessibility action must not wedge it.
+                }
+            }
+        }
+    }
 
     private fun scheduleRepeats(holdId: String, hold: ActiveHold) {
         hold.repeatJob?.cancel()
@@ -182,7 +217,7 @@ internal class HeldKeyWatchdog(
         }
     }
 
-    private fun release(holdId: String) {
+    private fun release(holdId: String, cancelled: Boolean = true) {
         val hold = active.remove(holdId) ?: return
         beforeReleaseLock(holdId)
         synchronized(hold) {
@@ -190,10 +225,16 @@ internal class HeldKeyWatchdog(
             hold.timeout = null
             hold.repeatJob?.cancel()
             hold.repeatJob = null
+            hold.longPressJob?.cancel()
+            hold.longPressJob = null
             if (!hold.downDelivered) return
             hold.downDelivered = false
             try {
-                onUp(hold.key, hold.downTime)
+                if (isLongPressKey(hold.key)) {
+                    if (!cancelled && !hold.longPressDelivered) onTap(hold.key)
+                } else {
+                    onUp(hold.key, hold.downTime)
+                }
             } catch (_: Exception) {
                 // One failed release must not stop other held-key timeouts.
             }
@@ -204,7 +245,7 @@ internal class HeldKeyWatchdog(
         synchronized(active) {
             closed = true
         }
-        active.keys.toList().forEach(::release)
+        active.keys.toList().forEach { release(it, cancelled = true) }
         scope.cancel()
     }
 }

@@ -258,6 +258,9 @@ class RemoteService : Service() {
             }
             if (key == com.example.tvlink.HeldRemoteKey.UP || key == com.example.tvlink.HeldRemoteKey.DOWN) {
                 if (performHeldDpadAction(key)) "ok" else "no-a11y"
+            } else if (key == com.example.tvlink.HeldRemoteKey.BACK || key == com.example.tvlink.HeldRemoteKey.OK) {
+                // These are delayed until release/long-press classification; never synthesize a held KeyEvent.
+                "ok"
             } else if (keyCode == null) {
                 "unsupported"
             } else {
@@ -303,6 +306,23 @@ class RemoteService : Service() {
             if (keyCode != null) {
                 val event = KeyEvent(downTime, android.os.SystemClock.uptimeMillis(), KeyEvent.ACTION_UP, keyCode, 0)
                 getSystemService(AudioManager::class.java).dispatchMediaKeyEvent(event)
+            }
+        },
+        onTap = { heldKey ->
+            this@RemoteService.key(if (heldKey == com.example.tvlink.HeldRemoteKey.BACK) "back" else "ok")
+        },
+        onLongPress = { key ->
+            when (key) {
+                com.example.tvlink.HeldRemoteKey.BACK -> {
+                    PowerAccessibilityService.instance?.performGlobalAction(AccessibilityService.GLOBAL_ACTION_BACK)
+                }
+                com.example.tvlink.HeldRemoteKey.OK -> {
+                    val service = PowerAccessibilityService.instance
+                    if (service == null || !service.performFocusedLongClick()) {
+                        service?.performGlobalAction(AccessibilityService.GLOBAL_ACTION_DPAD_CENTER)
+                    }
+                }
+                else -> Unit
             }
         }
     )

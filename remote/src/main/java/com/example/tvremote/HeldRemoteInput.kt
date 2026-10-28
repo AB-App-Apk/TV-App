@@ -12,7 +12,7 @@ import com.example.tvlink.HeldRemoteKey
 import java.util.UUID
 
 /**
- * Captures a touch as exactly one DOWN followed by one UP, including cancellation/disposal.
+ * Captures a touch as one DOWN followed by either a normal UP or a cancellation release.
  * This does not generate local repeat events. The button's normal onClick remains available for D-pad,
  * keyboard, and accessibility activation; consuming touch events keeps that click from duplicating the gesture.
  */
@@ -20,7 +20,7 @@ import java.util.UUID
 fun Modifier.heldRemoteInput(
     key: HeldRemoteKey,
     onDown: (HeldRemoteKey, String) -> Unit,
-    onUp: (HeldRemoteKey, String) -> Unit
+    onUp: (HeldRemoteKey, String, Boolean) -> Unit
 ): Modifier {
     val latestDown = rememberUpdatedState(onDown)
     val latestUp = rememberUpdatedState(onUp)
@@ -35,11 +35,17 @@ fun Modifier.heldRemoteInput(
                 down.consume()
                 val holdId = UUID.randomUUID().toString()
                 latestDown.value(key, holdId)
+                var cancelled = true
                 try {
                     val up = waitForUpOrCancellation(pass = PointerEventPass.Initial)
-                    up?.consume()
+                    if (up != null) {
+                        up.consume()
+                        cancelled = false
+                    }
                 } finally {
-                    latestUp.value(key, holdId)
+                    // Distinguish a real finger-up from cancellation/disposal. The TV must release either way,
+                    // but only a real UP may be interpreted as a short Back/OK tap.
+                    latestUp.value(key, holdId, cancelled)
                 }
             }
         }

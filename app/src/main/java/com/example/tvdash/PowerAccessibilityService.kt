@@ -104,6 +104,33 @@ class PowerAccessibilityService : AccessibilityService() {
         safely("sleep") { performGlobalAction(GLOBAL_ACTION_LOCK_SCREEN) }
     }
 
+    /**
+     * Attempts a real accessibility long-click on the currently focused TV UI node.
+     * Returns false when the app/firmware does not expose a focused node with long-click support.
+     */
+    fun performFocusedLongClick(): Boolean {
+        return try {
+            val root = rootInActiveWindow ?: return false
+            val focused = root.findFocus(AccessibilityNodeInfo.FOCUS_ACCESSIBILITY)
+                ?: findViewFocusedNode(root, 0)
+            focused?.performAction(AccessibilityNodeInfo.ACTION_LONG_CLICK) == true
+        } catch (t: Throwable) {
+            Log.w(TAG, "focused long-click failed", t)
+            false
+        }
+    }
+
+    private fun findViewFocusedNode(node: AccessibilityNodeInfo, depth: Int): AccessibilityNodeInfo? {
+        if (depth > 30) return null
+        if (node.isFocused) return node
+        for (index in 0 until node.childCount) {
+            val child = node.getChild(index) ?: continue
+            val focused = findViewFocusedNode(child, depth + 1)
+            if (focused != null) return focused
+        }
+        return null
+    }
+
     /** Types into whichever text field has input focus (e.g. a search bar). Never throws. */
     fun typeText(text: String, enter: Boolean): Boolean = try {
         val node = windows.mapNotNull { it.root }.firstNotNullOfOrNull { it.findFocus(AccessibilityNodeInfo.FOCUS_INPUT) }

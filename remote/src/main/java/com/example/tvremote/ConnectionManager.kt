@@ -304,8 +304,9 @@ class ConnectionManager(
 
     /**
      * Starts a real key-down report on Bluetooth HID when possible. TV Dash is the fallback for held media keys
-     * and UP/DOWN; its AccessibilityService repeats vertical navigation as discrete global actions. Back/OK still
-     * fall back to ordinary taps because accessibility cannot represent their held KeyEvents.
+     * and UP/DOWN; its AccessibilityService repeats vertical navigation as discrete global actions. Over TV Dash,
+     * Back/OK are classified at release: a quick tap sends one action, a long press sends one deliberate action,
+     * and cancellation sends none. Native Bluetooth HID retains real press/release reports.
      */
     suspend fun beginHeldInput(holdId: String, key: HeldRemoteKey): Boolean =
         heldLifecycleLock.withLock {
@@ -346,12 +347,13 @@ class ConnectionManager(
 
             if (
                 key == HeldRemoteKey.FORWARD || key == HeldRemoteKey.REWIND ||
-                key == HeldRemoteKey.UP || key == HeldRemoteKey.DOWN
+                key == HeldRemoteKey.UP || key == HeldRemoteKey.DOWN ||
+                key == HeldRemoteKey.BACK || key == HeldRemoteKey.OK
             ) {
                 val reply = link.get(HeldInputProtocol.path(holdId, key, HeldAction.DOWN))
                 if (reply is TvReply.Ok && reply.body.trim() == RemoteStatus.OK) {
                     if (!started) {
-                        link.get(HeldInputProtocol.path(holdId, key, HeldAction.UP))
+                        link.get(HeldInputProtocol.path(holdId, key, HeldAction.CANCEL))
                         return false
                     }
                     heldKeyById[holdId] = key
@@ -428,7 +430,7 @@ class ConnectionManager(
             when (road) {
                 HeldRoad.KEYBOARD -> keyboardLink.endHeldInput(holdId)
                 HeldRoad.DASH, HeldRoad.UNCERTAIN_DASH ->
-                    link.get(HeldInputProtocol.path(holdId, key, HeldAction.UP))
+                    link.get(HeldInputProtocol.path(holdId, key, HeldAction.CANCEL))
                 HeldRoad.TAP -> Unit
             }
         } finally {
@@ -437,11 +439,15 @@ class ConnectionManager(
     }
 
     /** Ends the exact route chosen by [beginHeldInput]; duplicate UPs are harmless. */
-    suspend fun endHeldInput(holdId: String) {
-        endHeldInput(holdId, fromWatchdog = false)
+    suspend fun endHeldInput(holdId: String, cancelled: Boolean = false) {
+        endHeldInput(holdId, fromWatchdog = false, cancelled = cancelled)
     }
 
-    private suspend fun endHeldInput(holdId: String, fromWatchdog: Boolean) {
+    private suspend fun endHeldInput(
+        holdId: String,
+        fromWatchdog: Boolean,
+        cancelled: Boolean = fromWatchdog
+    ) {
         heldLifecycleLock.withLock {
             heldRenewals.remove(holdId)?.cancel()
             val timeout = heldTimeouts.remove(holdId)
@@ -451,9 +457,11 @@ class ConnectionManager(
                 when (road) {
                     HeldRoad.KEYBOARD -> keyboardLink.endHeldInput(holdId)
                     HeldRoad.DASH, HeldRoad.UNCERTAIN_DASH -> {
-                        // Keep ordinary input blocked until the matching TV-side UP request has been attempted.
+                        // Keep ordinary input blocked until the matching TV-side release request has been attempted.
+                        // CANCEL releases without converting a cancelled Back/OK gesture into a tap.
                         heldKeyById.remove(holdId)?.let { key ->
-                            link.get(HeldInputProtocol.path(holdId, key, HeldAction.UP))
+                            val action = if (cancelled) HeldAction.CANCEL else HeldAction.UP
+                            link.get(HeldInputProtocol.path(holdId, key, action))
                         }
                     }
                     HeldRoad.TAP -> Unit
