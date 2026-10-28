@@ -304,8 +304,9 @@ class ConnectionManager(
 
     /**
      * Starts a real key-down report on Bluetooth HID when possible. TV Dash is the fallback for held media keys
-     * and UP/DOWN; its AccessibilityService repeats vertical navigation as discrete global actions. Back/OK still
-     * fall back to ordinary taps because accessibility cannot represent their held KeyEvents.
+     * and UP/DOWN; its AccessibilityService repeats vertical navigation as discrete global actions. Over TV Dash,
+     * Back/OK are classified at release: a quick tap sends one action, a long press sends one deliberate action,
+     * and cancellation sends none. Native Bluetooth HID retains real press/release reports.
      */
     suspend fun beginHeldInput(holdId: String, key: HeldRemoteKey): Boolean =
         heldLifecycleLock.withLock {
