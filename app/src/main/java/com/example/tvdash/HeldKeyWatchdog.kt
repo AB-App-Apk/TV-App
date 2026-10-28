@@ -29,6 +29,7 @@ internal class HeldKeyWatchdog(
     private val watchdogTimeoutMs: Long = HeldInputProtocol.WATCHDOG_TIMEOUT_MS,
     private val repeatInitialDelayMs: Long = DEFAULT_REPEAT_INITIAL_DELAY_MS,
     private val repeatIntervalMs: Long = DEFAULT_REPEAT_INTERVAL_MS,
+    private val longPressDelayMs: Long = DEFAULT_LONG_PRESS_DELAY_MS,
     /** Test seam for coordinating the registration-to-dispatch race; production default is a no-op. */
     private val afterHoldPublished: (String) -> Unit = {},
     /** Test seam called after a hold leaves the active map but before release acquires its lock. */
@@ -177,7 +178,7 @@ internal class HeldKeyWatchdog(
     private fun scheduleLongPress(holdId: String, hold: ActiveHold) {
         hold.longPressJob?.cancel()
         hold.longPressJob = scope.launch {
-            delay(DEFAULT_LONG_PRESS_DELAY_MS)
+            delay(longPressDelayMs)
             synchronized(hold) {
                 if (closed || active[holdId] !== hold || !hold.downDelivered || hold.longPressDelivered) return@synchronized
                 hold.longPressDelivered = true
