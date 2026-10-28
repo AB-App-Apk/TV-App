@@ -251,10 +251,14 @@ class RemoteService : Service() {
             val keyCode = when (key) {
                 com.example.tvlink.HeldRemoteKey.FORWARD -> KeyEvent.KEYCODE_MEDIA_FAST_FORWARD
                 com.example.tvlink.HeldRemoteKey.REWIND -> KeyEvent.KEYCODE_MEDIA_REWIND
+                com.example.tvlink.HeldRemoteKey.UP,
+                com.example.tvlink.HeldRemoteKey.DOWN,
                 com.example.tvlink.HeldRemoteKey.BACK,
                 com.example.tvlink.HeldRemoteKey.OK -> null
             }
-            if (keyCode == null) {
+            if (key == com.example.tvlink.HeldRemoteKey.UP || key == com.example.tvlink.HeldRemoteKey.DOWN) {
+                if (performHeldDpadAction(key)) "ok" else "no-a11y"
+            } else if (keyCode == null) {
                 "unsupported"
             } else {
                 val event = KeyEvent(downTime, downTime, KeyEvent.ACTION_DOWN, keyCode, 0)
@@ -263,13 +267,18 @@ class RemoteService : Service() {
             }
         },
         onRepeat = { key, downTime, repeatCount ->
-            val keyCode = when (key) {
-                com.example.tvlink.HeldRemoteKey.FORWARD -> KeyEvent.KEYCODE_MEDIA_FAST_FORWARD
-                com.example.tvlink.HeldRemoteKey.REWIND -> KeyEvent.KEYCODE_MEDIA_REWIND
-                com.example.tvlink.HeldRemoteKey.BACK,
-                com.example.tvlink.HeldRemoteKey.OK -> null
-            }
-            if (keyCode != null) {
+            if (key == com.example.tvlink.HeldRemoteKey.UP || key == com.example.tvlink.HeldRemoteKey.DOWN) {
+                performHeldDpadAction(key)
+            } else {
+                val keyCode = when (key) {
+                    com.example.tvlink.HeldRemoteKey.FORWARD -> KeyEvent.KEYCODE_MEDIA_FAST_FORWARD
+                    com.example.tvlink.HeldRemoteKey.REWIND -> KeyEvent.KEYCODE_MEDIA_REWIND
+                    com.example.tvlink.HeldRemoteKey.UP,
+                    com.example.tvlink.HeldRemoteKey.DOWN,
+                    com.example.tvlink.HeldRemoteKey.BACK,
+                    com.example.tvlink.HeldRemoteKey.OK -> null
+                }
+                if (keyCode != null) {
                 // Android models held-key repetition as additional ACTION_DOWN events with a nonzero repeat count.
                 val event = KeyEvent(
                     downTime,
@@ -278,13 +287,16 @@ class RemoteService : Service() {
                     keyCode,
                     repeatCount
                 )
-                getSystemService(AudioManager::class.java).dispatchMediaKeyEvent(event)
+                    getSystemService(AudioManager::class.java).dispatchMediaKeyEvent(event)
+                }
             }
         },
         onUp = { key, downTime ->
             val keyCode = when (key) {
                 com.example.tvlink.HeldRemoteKey.FORWARD -> KeyEvent.KEYCODE_MEDIA_FAST_FORWARD
                 com.example.tvlink.HeldRemoteKey.REWIND -> KeyEvent.KEYCODE_MEDIA_REWIND
+                com.example.tvlink.HeldRemoteKey.UP,
+                com.example.tvlink.HeldRemoteKey.DOWN,
                 com.example.tvlink.HeldRemoteKey.BACK,
                 com.example.tvlink.HeldRemoteKey.OK -> null
             }
@@ -294,6 +306,16 @@ class RemoteService : Service() {
             }
         }
     )
+
+    /** Accessibility global actions provide each vertical D-pad step; the watchdog repeats these while held. */
+    private fun performHeldDpadAction(key: com.example.tvlink.HeldRemoteKey): Boolean {
+        val action = when (key) {
+            com.example.tvlink.HeldRemoteKey.UP -> AccessibilityService.GLOBAL_ACTION_DPAD_UP
+            com.example.tvlink.HeldRemoteKey.DOWN -> AccessibilityService.GLOBAL_ACTION_DPAD_DOWN
+            else -> return false
+        }
+        return PowerAccessibilityService.instance?.performGlobalAction(action) == true
+    }
 
     /** One request line in, one answer out. Wi-Fi and Bluetooth keep the same protocol and denial response. */
     private fun answer(line: String, clientKey: String, suppliedPin: String?): Pair<String, String> {
