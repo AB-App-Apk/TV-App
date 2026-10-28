@@ -6,6 +6,8 @@ package com.example.tvlink
 enum class HeldRemoteKey(val wireName: String) {
     BACK("back"),
     OK("ok"),
+    UP("up"),
+    DOWN("down"),
     FORWARD("ff"),
     REWIND("rew");
 
