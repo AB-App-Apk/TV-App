@@ -214,6 +214,101 @@ class HeldKeyWatchdogTest {
     }
 
     @Test
+    fun backAndOkShortReleaseProduceOneTapOnly() = runBlocking {
+        for (key in listOf(HeldRemoteKey.BACK, HeldRemoteKey.OK)) {
+            val taps = CopyOnWriteArrayList<HeldRemoteKey>()
+            val longPresses = CopyOnWriteArrayList<HeldRemoteKey>()
+            val watchdog = HeldKeyWatchdog(
+                onDown = { _, _ -> "ok" },
+                onRepeat = { _, _, _ -> },
+                onUp = { _, _ -> },
+                onTap = { taps.add(it) },
+                onLongPress = { longPresses.add(it) },
+                longPressDelayMs = 120L,
+                watchdogTimeoutMs = 1_000L
+            )
+            val id = if (key == HeldRemoteKey.BACK) {
+                "c0ffee00-0000-4000-8000-000000000021"
+            } else {
+                "c0ffee00-0000-4000-8000-000000000022"
+            }
+            try {
+                assertEquals("ok", watchdog.handle(id, key, HeldAction.DOWN))
+                delay(30L)
+                assertEquals("ok", watchdog.handle(id, key, HeldAction.UP))
+                delay(140L)
+                assertEquals(listOf(key), taps)
+                assertTrue(longPresses.isEmpty())
+            } finally {
+                watchdog.close()
+            }
+        }
+    }
+
+    @Test
+    fun backAndOkLongPressFireOnceWithoutAlsoTapping() = runBlocking {
+        for (key in listOf(HeldRemoteKey.BACK, HeldRemoteKey.OK)) {
+            val taps = CopyOnWriteArrayList<HeldRemoteKey>()
+            val longPresses = CopyOnWriteArrayList<HeldRemoteKey>()
+            val watchdog = HeldKeyWatchdog(
+                onDown = { _, _ -> "ok" },
+                onRepeat = { _, _, _ -> },
+                onUp = { _, _ -> },
+                onTap = { taps.add(it) },
+                onLongPress = { longPresses.add(it) },
+                longPressDelayMs = 30L,
+                watchdogTimeoutMs = 1_000L
+            )
+            val id = if (key == HeldRemoteKey.BACK) {
+                "c0ffee00-0000-4000-8000-000000000031"
+            } else {
+                "c0ffee00-0000-4000-8000-000000000032"
+            }
+            try {
+                assertEquals("ok", watchdog.handle(id, key, HeldAction.DOWN))
+                delay(90L)
+                assertEquals("ok", watchdog.handle(id, key, HeldAction.UP))
+                delay(50L)
+                assertEquals(listOf(key), longPresses)
+                assertTrue(taps.isEmpty())
+            } finally {
+                watchdog.close()
+            }
+        }
+    }
+
+    @Test
+    fun cancelledBackOrOkGestureDoesNotBecomeTapOrLongPress() = runBlocking {
+        for (key in listOf(HeldRemoteKey.BACK, HeldRemoteKey.OK)) {
+            val taps = CopyOnWriteArrayList<HeldRemoteKey>()
+            val longPresses = CopyOnWriteArrayList<HeldRemoteKey>()
+            val watchdog = HeldKeyWatchdog(
+                onDown = { _, _ -> "ok" },
+                onRepeat = { _, _, _ -> },
+                onUp = { _, _ -> },
+                onTap = { taps.add(it) },
+                onLongPress = { longPresses.add(it) },
+                longPressDelayMs = 100L,
+                watchdogTimeoutMs = 1_000L
+            )
+            val id = if (key == HeldRemoteKey.BACK) {
+                "c0ffee00-0000-4000-8000-000000000041"
+            } else {
+                "c0ffee00-0000-4000-8000-000000000042"
+            }
+            try {
+                assertEquals("ok", watchdog.handle(id, key, HeldAction.DOWN))
+                assertEquals("ok", watchdog.handle(id, key, HeldAction.CANCEL))
+                delay(130L)
+                assertTrue(taps.isEmpty())
+                assertTrue(longPresses.isEmpty())
+            } finally {
+                watchdog.close()
+            }
+        }
+    }
+
+    @Test
     fun renewalRejectsWrongKeyAndUnknownHold() {
         val watchdog = HeldKeyWatchdog(
             onDown = { _, _ -> "ok" },
