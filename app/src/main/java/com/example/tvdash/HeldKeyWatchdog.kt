@@ -102,7 +102,7 @@ internal class HeldKeyWatchdog(
 
             hold.downDelivered = true
             scheduleTimeout(holdId, hold)
-            if (key == HeldRemoteKey.FORWARD || key == HeldRemoteKey.REWIND) {
+            if (isRepeatable(key)) {
                 scheduleRepeats(holdId, hold)
             }
         }
@@ -149,9 +149,13 @@ internal class HeldKeyWatchdog(
     }
 
     /**
-     * Emit platform-shaped repeated ACTION_DOWN events while a network media hold is active.
+     * Repeat a network-held media key or vertical navigation action.
      * Lease renewal remains independent: RENEW only extends the safety deadline.
      */
+    private fun isRepeatable(key: HeldRemoteKey): Boolean =
+        key == HeldRemoteKey.FORWARD || key == HeldRemoteKey.REWIND ||
+            key == HeldRemoteKey.UP || key == HeldRemoteKey.DOWN
+
     private fun scheduleRepeats(holdId: String, hold: ActiveHold) {
         hold.repeatJob?.cancel()
         hold.repeatJob = scope.launch {

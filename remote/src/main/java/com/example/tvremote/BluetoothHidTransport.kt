@@ -440,6 +440,8 @@ class BluetoothHidTransport(context: Context) : RemoteTransport {
         val command = when (key) {
             HeldRemoteKey.BACK -> RemoteCommand.BACK
             HeldRemoteKey.OK -> RemoteCommand.OK
+            HeldRemoteKey.UP -> RemoteCommand.UP
+            HeldRemoteKey.DOWN -> RemoteCommand.DOWN
             HeldRemoteKey.FORWARD -> RemoteCommand.FORWARD
             HeldRemoteKey.REWIND -> RemoteCommand.REWIND
         }

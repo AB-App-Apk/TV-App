@@ -75,6 +75,49 @@ class HeldKeyWatchdogTest {
     }
 
     @Test
+    fun dpadHoldsRepeatForBothDirectionsAndStopOnUp() = runBlocking {
+        for (key in listOf(HeldRemoteKey.UP, HeldRemoteKey.DOWN)) {
+            val repeats = CopyOnWriteArrayList<Triple<HeldRemoteKey, Long, Int>>()
+            val ups = CopyOnWriteArrayList<Pair<HeldRemoteKey, Long>>()
+            val watchdog = HeldKeyWatchdog(
+                onDown = { actualKey, _ ->
+                    assertEquals(key, actualKey)
+                    "ok"
+                },
+                onRepeat = { actualKey, downTime, count ->
+                    repeats.add(Triple(actualKey, downTime, count))
+                },
+                onUp = { actualKey, downTime -> ups.add(actualKey to downTime) },
+                uptimeMillis = { 123L },
+                watchdogTimeoutMs = 1_000L,
+                repeatInitialDelayMs = 30L,
+                repeatIntervalMs = 25L
+            )
+            val id = if (key == HeldRemoteKey.UP) {
+                "c0ffee00-0000-4000-8000-000000000011"
+            } else {
+                "c0ffee00-0000-4000-8000-000000000012"
+            }
+
+            try {
+                assertEquals("ok", watchdog.handle(id, key, HeldAction.DOWN))
+                delay(115L)
+                assertTrue("expected repeated $key actions", repeats.size >= 2)
+                assertEquals(listOf(1, 2, 3), repeats.map { it.third }.take(3))
+                assertTrue(repeats.all { it.first == key && it.second == 123L })
+
+                assertEquals("ok", watchdog.handle(id, key, HeldAction.UP))
+                val countAtRelease = repeats.size
+                delay(80L)
+                assertEquals("no $key repeats may occur after UP", countAtRelease, repeats.size)
+                assertEquals(listOf(key to 123L), ups)
+            } finally {
+                watchdog.close()
+            }
+        }
+    }
+
+    @Test
     fun upCannotFinishBetweenHoldPublicationAndDownDispatch() {
         val published = CountDownLatch(1)
         val allowDown = CountDownLatch(1)
