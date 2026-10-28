@@ -21,7 +21,9 @@ enum class HeldRemoteKey(val wireName: String) {
 enum class HeldAction(val wireName: String) {
     DOWN("down"),
     RENEW("renew"),
-    UP("up");
+    UP("up"),
+    /** Release a hold without converting a cancelled gesture into a short tap. */
+    CANCEL("cancel");
 
     companion object {
         fun fromWire(value: String?): HeldAction? =
