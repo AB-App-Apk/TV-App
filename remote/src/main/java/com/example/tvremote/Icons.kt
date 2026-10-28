@@ -81,8 +81,8 @@ fun RemoteButton(icon: Ico, label: String, modifier: Modifier = Modifier, onClic
 }
 
 @Composable
-fun DKey(icon: Ico, onClick: () -> Unit) {
-    FilledTonalIconButton(onClick = onClick, modifier = Modifier.size(72.dp)) {
+fun DKey(icon: Ico, modifier: Modifier = Modifier, onClick: () -> Unit) {
+    FilledTonalIconButton(onClick = onClick, modifier = modifier.size(72.dp)) {
         RIcon(icon, LocalContentColor.current, 36.dp)
     }
 }
