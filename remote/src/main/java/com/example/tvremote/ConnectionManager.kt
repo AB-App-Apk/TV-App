@@ -303,8 +303,9 @@ class ConnectionManager(
     // ---------------------------------------------------------------- held buttons
 
     /**
-     * Starts a real key-down report on Bluetooth HID when possible. The TV Dash endpoint is only a fallback
-     * for media keys, because AccessibilityService cannot inject arbitrary held Back/OK KeyEvents.
+     * Starts a real key-down report on Bluetooth HID when possible. TV Dash is the fallback for held media keys
+     * and UP/DOWN; its AccessibilityService repeats vertical navigation as discrete global actions. Back/OK still
+     * fall back to ordinary taps because accessibility cannot represent their held KeyEvents.
      */
     suspend fun beginHeldInput(holdId: String, key: HeldRemoteKey): Boolean =
         heldLifecycleLock.withLock {
@@ -343,7 +344,10 @@ class ConnectionManager(
                 }
             }
 
-            if (key == HeldRemoteKey.FORWARD || key == HeldRemoteKey.REWIND) {
+            if (
+                key == HeldRemoteKey.FORWARD || key == HeldRemoteKey.REWIND ||
+                key == HeldRemoteKey.UP || key == HeldRemoteKey.DOWN
+            ) {
                 val reply = link.get(HeldInputProtocol.path(holdId, key, HeldAction.DOWN))
                 if (reply is TvReply.Ok && reply.body.trim() == RemoteStatus.OK) {
                     if (!started) {
@@ -385,6 +389,8 @@ class ConnectionManager(
             val command = when (key) {
                 HeldRemoteKey.BACK -> RemoteCommand.BACK
                 HeldRemoteKey.OK -> RemoteCommand.OK
+                HeldRemoteKey.UP -> RemoteCommand.UP
+                HeldRemoteKey.DOWN -> RemoteCommand.DOWN
                 HeldRemoteKey.FORWARD -> RemoteCommand.FORWARD
                 HeldRemoteKey.REWIND -> RemoteCommand.REWIND
             }
