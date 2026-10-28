@@ -884,16 +884,22 @@ class ConnectionManager(
     private fun watchDash() {
         scope.launch {
             var wait = BACKOFF_MIN_MS
-            while (isActive) {
-                val up = link.get("ping") !is TvReply.Unreachable
-                setDash(up)
-                val pause = if (up) {
-                    wait = BACKOFF_MIN_MS
-                    HEALTHY_CHECK_MS
-                } else {
-                    val current = wait
-                    wait = (wait * 2).coerceAtMost(BACKOFF_MAX_MS)
-                    current
+                        while (isActive) {
+                val reply = link.get("ping")
+                val rejected = reply is TvReply.Rejected && reply.http == 403
+                setDash(reply !is TvReply.Unreachable && !rejected)
+                if (rejected) noteDashRejected(403)
+                val pause = when {
+                    rejected -> 120_000L
+                    reply !is TvReply.Unreachable -> {
+                        wait = BACKOFF_MIN_MS
+                        HEALTHY_CHECK_MS
+                    }
+                    else -> {
+                        val current = wait
+                        wait = (wait * 2).coerceAtMost(BACKOFF_MAX_MS)
+                        current
+                    }
                 }
                 withTimeoutOrNull(pause) { dashNudge.receive() }
             }
