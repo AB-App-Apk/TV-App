@@ -105,7 +105,7 @@ class BluetoothDataClient(context: Context, private val pin: () -> String) {
                 waitForWarmNudge(WARM_NOT_READY_MS)
                 continue
             }
-            val rejected = false
+            var rejected = false
             val ready = try {
                 lock.withLock {
                     if (closed || !isAvailable()) {
