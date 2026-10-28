@@ -245,7 +245,7 @@ class RemoteService : Service() {
     /** Shared by Wi-Fi and Bluetooth, with independent attempt histories for each client. */
     private val pinLimiter = PinAttemptLimiter()
 
-    /** Network-held media keys; unmatched releases are generated after the safety timeout. */
+    /** Network-held media and vertical-navigation inputs; unmatched holds expire after the safety timeout. */
     private val heldKeyWatchdog = HeldKeyWatchdog(
         onDown = { key, downTime ->
             val keyCode = when (key) {
@@ -279,14 +279,14 @@ class RemoteService : Service() {
                     com.example.tvlink.HeldRemoteKey.OK -> null
                 }
                 if (keyCode != null) {
-                // Android models held-key repetition as additional ACTION_DOWN events with a nonzero repeat count.
-                val event = KeyEvent(
-                    downTime,
-                    android.os.SystemClock.uptimeMillis(),
-                    KeyEvent.ACTION_DOWN,
-                    keyCode,
-                    repeatCount
-                )
+                    // Android models held-key repetition as additional ACTION_DOWN events with a nonzero repeat count.
+                    val event = KeyEvent(
+                        downTime,
+                        android.os.SystemClock.uptimeMillis(),
+                        KeyEvent.ACTION_DOWN,
+                        keyCode,
+                        repeatCount
+                    )
                     getSystemService(AudioManager::class.java).dispatchMediaKeyEvent(event)
                 }
             }
