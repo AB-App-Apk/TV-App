@@ -19,9 +19,12 @@ import java.util.concurrent.ConcurrentHashMap
  */
 internal class HeldKeyWatchdog(
     private val onDown: (HeldRemoteKey, Long) -> String,
+    private val onRepeat: (HeldRemoteKey, Long, Int) -> Unit,
     private val onUp: (HeldRemoteKey, Long) -> Unit,
     private val uptimeMillis: () -> Long = { SystemClock.uptimeMillis() },
     private val watchdogTimeoutMs: Long = HeldInputProtocol.WATCHDOG_TIMEOUT_MS,
+    private val repeatInitialDelayMs: Long = DEFAULT_REPEAT_INITIAL_DELAY_MS,
+    private val repeatIntervalMs: Long = DEFAULT_REPEAT_INTERVAL_MS,
     /** Test seam for coordinating the registration-to-dispatch race; production default is a no-op. */
     private val afterHoldPublished: (String) -> Unit = {},
     /** Test seam called after a hold leaves the active map but before release acquires its lock. */
@@ -29,6 +32,8 @@ internal class HeldKeyWatchdog(
 ) : AutoCloseable {
     private companion object {
         const val MAX_ACTIVE_HOLDS = 8
+        const val DEFAULT_REPEAT_INITIAL_DELAY_MS = 500L
+        const val DEFAULT_REPEAT_INTERVAL_MS = 250L
     }
 
     private class ActiveHold(
@@ -36,6 +41,8 @@ internal class HeldKeyWatchdog(
         val downTime: Long
     ) {
         @Volatile var timeout: Job? = null
+        var repeatJob: Job? = null
+        var repeatCount: Int = 0
         var downDelivered: Boolean = false
     }
 
@@ -95,6 +102,9 @@ internal class HeldKeyWatchdog(
 
             hold.downDelivered = true
             scheduleTimeout(holdId, hold)
+            if (key == HeldRemoteKey.FORWARD || key == HeldRemoteKey.REWIND) {
+                scheduleRepeats(holdId, hold)
+            }
         }
         return "ok"
     }
@@ -121,6 +131,8 @@ internal class HeldKeyWatchdog(
                 if (active[holdId] === hold && hold.timeout === timeout) {
                     active.remove(holdId, hold)
                     hold.timeout = null
+                    hold.repeatJob?.cancel()
+                    hold.repeatJob = null
                     shouldRelease = hold.downDelivered
                     hold.downDelivered = false
                 }
@@ -136,12 +148,44 @@ internal class HeldKeyWatchdog(
         hold.timeout = timeout
     }
 
+    /**
+     * Emit platform-shaped repeated ACTION_DOWN events while a network media hold is active.
+     * Lease renewal remains independent: RENEW only extends the safety deadline.
+     */
+    private fun scheduleRepeats(holdId: String, hold: ActiveHold) {
+        hold.repeatJob?.cancel()
+        hold.repeatJob = scope.launch {
+            delay(repeatInitialDelayMs)
+            while (true) {
+                val shouldContinue = synchronized(hold) {
+                    if (closed || active[holdId] !== hold || !hold.downDelivered) {
+                        false
+                    } else {
+                        val nextCount = hold.repeatCount + 1
+                        try {
+                            onRepeat(hold.key, hold.downTime, nextCount)
+                            hold.repeatCount = nextCount
+                            true
+                        } catch (_: Exception) {
+                            // Stop repeating after a dispatch failure; the UP/watchdog path still owns release.
+                            false
+                        }
+                    }
+                }
+                if (!shouldContinue) break
+                delay(repeatIntervalMs)
+            }
+        }
+    }
+
     private fun release(holdId: String) {
         val hold = active.remove(holdId) ?: return
         beforeReleaseLock(holdId)
         synchronized(hold) {
             hold.timeout?.cancel()
             hold.timeout = null
+            hold.repeatJob?.cancel()
+            hold.repeatJob = null
             if (!hold.downDelivered) return
             hold.downDelivered = false
             try {
