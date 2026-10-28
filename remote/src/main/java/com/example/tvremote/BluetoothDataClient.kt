@@ -105,7 +105,7 @@ class BluetoothDataClient(context: Context, private val pin: () -> String) {
                 waitForWarmNudge(WARM_NOT_READY_MS)
                 continue
             }
-
+            val rejected = false
             val ready = try {
                 lock.withLock {
                     if (closed || !isAvailable()) {
@@ -116,8 +116,12 @@ class BluetoothDataClient(context: Context, private val pin: () -> String) {
                             val active = connected(warming = true) ?: return@withLock false
                             // A short heartbeat detects a peer-closed socket before the next real request.
                             // If a user request is waiting, leave the warm socket alone and release the lock quickly.
-                            if (!requestWaiting) {
-                                exchange(active, "ping", WARM_PING_TIMEOUT_MS)
+                             if (!requestWaiting) {
+                                val r = exchange(active, "ping", WARM_PING_TIMEOUT_MS)
+                                if (r is TvReply.Rejected && r.http == 403) {
+                                    rejected = true
+                                    return@withLock false
+                                }
                             }
                             true
                         } catch (e: CancellationException) {
@@ -139,8 +143,8 @@ class BluetoothDataClient(context: Context, private val pin: () -> String) {
             if (ready) {
                 retryMs = WARM_RETRY_MIN_MS
                 waitForWarmNudge(WARM_CHECK_MS)
-            } else {
-                waitForWarmNudge(retryMs)
+             } else {
+                waitForWarmNudge(if (rejected) 120_000L else retryMs)
                 retryMs = (retryMs * 2).coerceAtMost(WARM_RETRY_MAX_MS)
             }
         }
