@@ -308,8 +308,8 @@ class RemoteService : Service() {
                 getSystemService(AudioManager::class.java).dispatchMediaKeyEvent(event)
             }
         },
-        onTap = { key ->
-            key(if (key == com.example.tvlink.HeldRemoteKey.BACK) "back" else "ok")
+        onTap = { heldKey ->
+            this@RemoteService.key(if (heldKey == com.example.tvlink.HeldRemoteKey.BACK) "back" else "ok")
         },
         onLongPress = { key ->
             when (key) {
