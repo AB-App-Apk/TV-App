@@ -20,7 +20,7 @@ import java.util.UUID
 fun Modifier.heldRemoteInput(
     key: HeldRemoteKey,
     onDown: (HeldRemoteKey, String) -> Unit,
-    onUp: (HeldRemoteKey, String) -> Unit
+    onUp: (HeldRemoteKey, String, Boolean) -> Unit
 ): Modifier {
     val latestDown = rememberUpdatedState(onDown)
     val latestUp = rememberUpdatedState(onUp)
@@ -35,11 +35,17 @@ fun Modifier.heldRemoteInput(
                 down.consume()
                 val holdId = UUID.randomUUID().toString()
                 latestDown.value(key, holdId)
+                var cancelled = true
                 try {
                     val up = waitForUpOrCancellation(pass = PointerEventPass.Initial)
-                    up?.consume()
+                    if (up != null) {
+                        up.consume()
+                        cancelled = false
+                    }
                 } finally {
-                    latestUp.value(key, holdId)
+                    // Distinguish a real finger-up from cancellation/disposal. The TV must release either way,
+                    // but only a real UP may be interpreted as a short Back/OK tap.
+                    latestUp.value(key, holdId, cancelled)
                 }
             }
         }
