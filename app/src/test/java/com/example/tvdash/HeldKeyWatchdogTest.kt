@@ -224,6 +224,7 @@ class HeldKeyWatchdogTest {
                 onUp = { _, _ -> },
                 onTap = { taps.add(it) },
                 onLongPress = { longPresses.add(it) },
+                uptimeMillis = { 123L },
                 longPressDelayMs = 120L,
                 watchdogTimeoutMs = 1_000L
             )
@@ -256,6 +257,7 @@ class HeldKeyWatchdogTest {
                 onUp = { _, _ -> },
                 onTap = { taps.add(it) },
                 onLongPress = { longPresses.add(it) },
+                uptimeMillis = { 123L },
                 longPressDelayMs = 30L,
                 watchdogTimeoutMs = 1_000L
             )
@@ -288,6 +290,7 @@ class HeldKeyWatchdogTest {
                 onUp = { _, _ -> },
                 onTap = { taps.add(it) },
                 onLongPress = { longPresses.add(it) },
+                uptimeMillis = { 123L },
                 longPressDelayMs = 100L,
                 watchdogTimeoutMs = 1_000L
             )
