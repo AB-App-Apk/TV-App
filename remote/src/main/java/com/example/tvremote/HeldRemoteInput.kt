@@ -12,7 +12,7 @@ import com.example.tvlink.HeldRemoteKey
 import java.util.UUID
 
 /**
- * Captures a touch as exactly one DOWN followed by one UP, including cancellation/disposal.
+ * Captures a touch as one DOWN followed by either a normal UP or a cancellation release.
  * This does not generate local repeat events. The button's normal onClick remains available for D-pad,
  * keyboard, and accessibility activation; consuming touch events keeps that click from duplicating the gesture.
  */
