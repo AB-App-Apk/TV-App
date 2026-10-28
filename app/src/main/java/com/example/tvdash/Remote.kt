@@ -262,6 +262,25 @@ class RemoteService : Service() {
                 "ok"
             }
         },
+        onRepeat = { key, downTime, repeatCount ->
+            val keyCode = when (key) {
+                com.example.tvlink.HeldRemoteKey.FORWARD -> KeyEvent.KEYCODE_MEDIA_FAST_FORWARD
+                com.example.tvlink.HeldRemoteKey.REWIND -> KeyEvent.KEYCODE_MEDIA_REWIND
+                com.example.tvlink.HeldRemoteKey.BACK,
+                com.example.tvlink.HeldRemoteKey.OK -> null
+            }
+            if (keyCode != null) {
+                // Android models held-key repetition as additional ACTION_DOWN events with a nonzero repeat count.
+                val event = KeyEvent(
+                    downTime,
+                    android.os.SystemClock.uptimeMillis(),
+                    KeyEvent.ACTION_DOWN,
+                    keyCode,
+                    repeatCount
+                )
+                getSystemService(AudioManager::class.java).dispatchMediaKeyEvent(event)
+            }
+        },
         onUp = { key, downTime ->
             val keyCode = when (key) {
                 com.example.tvlink.HeldRemoteKey.FORWARD -> KeyEvent.KEYCODE_MEDIA_FAST_FORWARD
