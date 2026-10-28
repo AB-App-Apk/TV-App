@@ -15,14 +15,15 @@
 3. ConnectionManager chooses one route for that hold. Bluetooth HID is preferred for all four keys. The TV Dash network endpoint is only a fallback for Fast Forward and Rewind.
 4. TV Dash keeps active network holds in a concurrent map and schedules an automatic UP when its four-second safety lease expires.
 5. While the touch remains down, the phone renews the lease every second; renewal refreshes the TV watchdog without sending a second DOWN.
-6. A user UP, gesture cancellation, phone/service interruption, or the watchdog releases the hold. Duplicate UP requests are idempotent.
-7. The phone's input gate stays reserved from before DOWN until the matching UP/release path finishes. Ordinary button commands and text payloads wait behind a real hold, so they cannot send a conflicting HID report or a competing TV Dash media tap. One-shot fallback taps release the gate before using the ordinary command path.
+6. For network-held Fast Forward and Rewind, the TV independently emits repeated media-key ACTION_DOWN events after a 500 ms initial delay and then every 250 ms. Each repeat has an increasing repeat count; lease renewal does not reset the repeat cadence.
+7. A user UP, gesture cancellation, phone/service interruption, or the watchdog releases the hold and cancels repeat generation. Duplicate UP requests are idempotent.
+8. The phone's input gate stays reserved from before DOWN until the matching UP/release path finishes. Ordinary button commands and text payloads wait behind a real hold, so they cannot send a conflicting HID report or a competing TV Dash media tap. One-shot fallback taps release the gate before using the ordinary command path.
 
 ## Platform limitation
 
 `AccessibilityService.performGlobalAction()` cannot represent a held Back or OK key. `dispatchGesture()` injects touch gestures, not keyboard events. Therefore TV Dash's Wi-Fi endpoint returns `unsupported` for held Back/OK rather than falsely claiming a native hold. Those keys use Bluetooth HID when it is connected. Existing one-shot accessibility actions remain available through the regular tap handlers.
 
-The network watchdog supports native media-key DOWN/UP for Fast Forward and Rewind using `AudioManager.dispatchMediaKeyEvent(KeyEvent)`. The OS/device may still ignore media-key holds; verify on the target TV.
+The network watchdog sends the initial media-key DOWN, followed by repeated ACTION_DOWN events with nonzero repeat counts (500 ms initial delay, 250 ms interval), then ACTION_UP on release or lease expiry. Repeats are generated TV-side and are independent of Wi-Fi/RFCOMM lease renewals. This is intended to provide sustained seeking on Wi-Fi, but the media session/player and TV firmware may handle repeated media-key events differently; verify actual seeking on the target TV.
 
 ## Permission/onboarding adaptation
 

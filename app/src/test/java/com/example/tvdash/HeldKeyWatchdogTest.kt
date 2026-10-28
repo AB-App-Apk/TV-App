@@ -19,6 +19,7 @@ class HeldKeyWatchdogTest {
         val ups = CopyOnWriteArrayList<Pair<HeldRemoteKey, Long>>()
         val watchdog = HeldKeyWatchdog(
             onDown = { key, downTime -> downs.add(key to downTime); "ok" },
+            onRepeat = { _, _, _ -> },
             onUp = { key, downTime -> ups.add(key to downTime) },
             uptimeMillis = { 123L },
             watchdogTimeoutMs = 400L
@@ -42,6 +43,38 @@ class HeldKeyWatchdogTest {
     }
 
     @Test
+    fun mediaHoldRepeatsWithIncreasingCountsAndStopsOnUp() = runBlocking {
+        val repeats = CopyOnWriteArrayList<Triple<HeldRemoteKey, Long, Int>>()
+        val ups = CopyOnWriteArrayList<Pair<HeldRemoteKey, Long>>()
+        val watchdog = HeldKeyWatchdog(
+            onDown = { _, _ -> "ok" },
+            onRepeat = { key, downTime, count -> repeats.add(Triple(key, downTime, count)) },
+            onUp = { key, downTime -> ups.add(key to downTime) },
+            uptimeMillis = { 123L },
+            watchdogTimeoutMs = 1_000L,
+            repeatInitialDelayMs = 30L,
+            repeatIntervalMs = 25L
+        )
+        val id = "c0ffee00-0000-4000-8000-000000000001"
+
+        try {
+            assertEquals("ok", watchdog.handle(id, HeldRemoteKey.FORWARD, HeldAction.DOWN))
+            delay(115L)
+            assertTrue("expected repeated media key DOWN events", repeats.size >= 2)
+            assertEquals(listOf(1, 2, 3).take(repeats.size), repeats.map { it.third }.take(3))
+            assertTrue(repeats.all { it.first == HeldRemoteKey.FORWARD && it.second == 123L })
+
+            assertEquals("ok", watchdog.handle(id, HeldRemoteKey.FORWARD, HeldAction.UP))
+            val countAtRelease = repeats.size
+            delay(80L)
+            assertEquals("no repeats may occur after UP", countAtRelease, repeats.size)
+            assertEquals(listOf(HeldRemoteKey.FORWARD to 123L), ups)
+        } finally {
+            watchdog.close()
+        }
+    }
+
+    @Test
     fun upCannotFinishBetweenHoldPublicationAndDownDispatch() {
         val published = CountDownLatch(1)
         val allowDown = CountDownLatch(1)
@@ -51,6 +84,7 @@ class HeldKeyWatchdogTest {
         val executor = Executors.newFixedThreadPool(2)
         val watchdog = HeldKeyWatchdog(
             onDown = { _, _ -> events.add("down"); "ok" },
+            onRepeat = { _, _, _ -> },
             onUp = { _, _ -> events.add("up") },
             uptimeMillis = { 123L },
             watchdogTimeoutMs = 5_000L,
@@ -99,6 +133,7 @@ class HeldKeyWatchdogTest {
         val executor = Executors.newFixedThreadPool(2)
         val watchdog = HeldKeyWatchdog(
             onDown = { _, _ -> events.add("down"); "ok" },
+            onRepeat = { _, _, _ -> },
             onUp = { _, _ -> events.add("up") },
             uptimeMillis = { 123L },
             watchdogTimeoutMs = 5_000L,
@@ -139,6 +174,7 @@ class HeldKeyWatchdogTest {
     fun renewalRejectsWrongKeyAndUnknownHold() {
         val watchdog = HeldKeyWatchdog(
             onDown = { _, _ -> "ok" },
+            onRepeat = { _, _, _ -> },
             onUp = { _, _ -> },
             uptimeMillis = { 123L }
         )
