@@ -35,9 +35,13 @@ internal fun BluetoothPermissionRationaleOverlay(
     onContinueWithoutBluetooth: () -> Unit
 ) {
     val firstButton = remember { FocusRequester() }
-    LaunchedEffect(Unit) {
+    val continueButton = remember { FocusRequester() }
+    LaunchedEffect(permanentlyDenied) {
         delay(150)
-        runCatching { firstButton.requestFocus() }
+        val focused = runCatching { firstButton.requestFocus() }.getOrDefault(false)
+        if (!focused) {
+            runCatching { continueButton.requestFocus() }
+        }
     }
     Box(modifier = Modifier
             .fillMaxSize()
@@ -74,8 +78,11 @@ internal fun BluetoothPermissionRationaleOverlay(
                     Text("Allow Nearby devices")
                 }
             }
-                    Button(onClick = onContinueWithoutBluetooth) {
-                    Text("Continue with Wi-Fi only")
+            Button(
+                onClick = onContinueWithoutBluetooth,
+                modifier = Modifier.focusRequester(continueButton)
+            ) {
+                Text("Continue with Wi-Fi only")
             }
         }
     }
