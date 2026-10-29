@@ -17,6 +17,11 @@ import androidx.compose.ui.unit.dp
 import androidx.tv.material3.Button
 import androidx.tv.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.remember
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import kotlinx.coroutines.delay
 
 /**
  * D-pad-friendly rationale shown before asking Android for BLUETOOTH_CONNECT.
@@ -29,8 +34,12 @@ internal fun BluetoothPermissionRationaleOverlay(
     onOpenSettings: () -> Unit,
     onContinueWithoutBluetooth: () -> Unit
 ) {
-    Box(
-        modifier = Modifier
+    val firstButton = remember { FocusRequester() }
+    LaunchedEffect(Unit) {
+        delay(150)
+        runCatching { firstButton.requestFocus() }
+    }
+    Box(modifier = Modifier
             .fillMaxSize()
             .background(Color.Black.copy(alpha = 0.94f))
             .padding(24.dp),
@@ -57,16 +66,16 @@ internal fun BluetoothPermissionRationaleOverlay(
                     color = MaterialTheme.colorScheme.error,
                     textAlign = TextAlign.Center
                 )
-                Button(onClick = onOpenSettings) {
+                    Button(onClick = onOpenSettings, modifier = Modifier.focusRequester(firstButton)) {
                     Text("Open app settings")
                 }
             } else {
-                Button(onClick = onAllow) {
+                    Button(onClick = onAllow, modifier = Modifier.focusRequester(firstButton)) {
                     Text("Allow Nearby devices")
                 }
             }
-            Button(onClick = onContinueWithoutBluetooth) {
-                Text("Continue with Wi-Fi only")
+                    Button(onClick = onContinueWithoutBluetooth) {
+                    Text("Continue with Wi-Fi only")
             }
         }
     }
