@@ -145,20 +145,15 @@ class MainActivity : ComponentActivity() {
     val appOps = getSystemService(AppOpsManager::class.java) ?: return
 
     val mode = try {
-        appOps.noteOpNoThrow(
-            "android:access_restricted_settings",
-            android.os.Process.myUid(),
-            packageName
-        )
-    } catch (e: Exception) {
-        Log.w(TAG, "Unable to check restricted-settings state", e)
-        return
-    }
-
-    if (mode != AppOpsManager.MODE_ALLOWED) {
-        restrictedSettingsPrompted = true
-        openHiddenSystemSettings()
-    }
+    appOps.unsafeCheckOpNoThrow("android:access_restricted_settings", android.os.Process.myUid(), packageName)
+     } catch (e: Exception) {
+    Log.w(TAG, "Unable to check restricted-settings state", e)
+    return
+     }
+    if (mode == AppOpsManager.MODE_IGNORED || mode == AppOpsManager.MODE_ERRORED) {
+    restrictedSettingsPrompted = true
+    openHiddenSystemSettings()
+   }
 }
 
     private fun openHiddenSystemSettings() {
