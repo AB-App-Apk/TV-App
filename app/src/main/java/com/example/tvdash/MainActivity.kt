@@ -26,6 +26,7 @@ import androidx.compose.foundation.lazy.grid.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
@@ -68,8 +69,11 @@ class MainActivity : ComponentActivity() {
         refreshBluetoothPermission(showOverlay = true)
         setContent {
             MaterialTheme(colorScheme = darkColorScheme()) {
-                Box(Modifier.fillMaxSize()) {
-                    HomeScreen()
+                                Box(Modifier.fillMaxSize()) {
+                    Box(
+                        Modifier.fillMaxSize()
+                            .focusProperties { canFocus = !showBluetoothPermissionRationale }
+                    ) { HomeScreen() }
                     if (showBluetoothPermissionRationale) {
                         BluetoothPermissionRationaleOverlay(
                             permanentlyDenied = bluetoothPermissionPermanentlyDenied,
