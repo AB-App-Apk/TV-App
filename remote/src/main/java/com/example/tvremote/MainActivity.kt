@@ -178,8 +178,15 @@ fun RemoteApp(graph: RemoteGraph, viewModel: RemoteViewModel) {
         scope.launch {
             val r = link.get("apps").bodyOrNull()
             if (r == null) { msg = noTv; return@launch }
-            val a = JSONArray(r)
-            apps = List(a.length()) { a.getJSONObject(it).let { o -> o.getString("n") to o.getString("p") } }
+            val parsed = runCatching {
+                val a = JSONArray(r)
+                List(a.length()) { a.getJSONObject(it).let { o -> o.getString("n") to o.getString("p") } }
+            }.getOrNull()
+            if (parsed == null) {
+                msg = "The TV sent an unexpected answer. Update TV Dash, then try again."
+                return@launch
+            }
+            apps = parsed
             msg = ""
         }
     }
