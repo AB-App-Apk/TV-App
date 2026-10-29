@@ -23,7 +23,8 @@
     <uses-feature android:name="android.hardware.bluetooth" android:required="false" />
 
     <!-- No usesCleartextTraffic: the Wi-Fi link to the TV is HTTPS now, so the app must not be able to send plain HTTP. -->
-    <application
+        <application
+        android:allowBackup="false"
         android:label="TV Remote"
         android:theme="@android:style/Theme.DeviceDefault.NoActionBar">
         <service
