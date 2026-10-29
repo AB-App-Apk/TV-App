@@ -83,10 +83,10 @@ class MainActivity : ComponentActivity() {
             LaunchedEffect(showBluetoothPermissionRationale) {
                 if (!showBluetoothPermissionRationale) {
                     delay(150)
-                    val focused = runCatching {
+                    val focusRequested = runCatching {
                         dashboardFocusRequester.requestFocus()
-                    }.getOrDefault(false)
-                    if (!focused) Log.w(TAG, "Could not restore dashboard focus")
+                    }.isSuccess
+                    if (!focusRequested) Log.w(TAG, "Could not request dashboard focus")
                 }
             }
             MaterialTheme(colorScheme = darkColorScheme()) {
