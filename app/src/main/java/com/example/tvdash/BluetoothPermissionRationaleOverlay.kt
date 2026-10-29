@@ -18,9 +18,11 @@ import androidx.tv.material3.Button
 import androidx.tv.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
 import kotlinx.coroutines.delay
 
 /**
@@ -36,10 +38,13 @@ internal fun BluetoothPermissionRationaleOverlay(
 ) {
     val firstButton = remember { FocusRequester() }
     val continueButton = remember { FocusRequester() }
+    val firstButtonHasFocus = remember { mutableStateOf(false) }
     LaunchedEffect(permanentlyDenied) {
+        firstButtonHasFocus.value = false
         delay(150)
-        val focused = runCatching { firstButton.requestFocus() }.getOrDefault(false)
-        if (!focused) {
+        runCatching { firstButton.requestFocus() }
+        delay(100)
+        if (!firstButtonHasFocus.value) {
             runCatching { continueButton.requestFocus() }
         }
     }
@@ -70,11 +75,21 @@ internal fun BluetoothPermissionRationaleOverlay(
                     color = MaterialTheme.colorScheme.error,
                     textAlign = TextAlign.Center
                 )
-                    Button(onClick = onOpenSettings, modifier = Modifier.focusRequester(firstButton)) {
+                Button(
+                    onClick = onOpenSettings,
+                    modifier = Modifier
+                        .focusRequester(firstButton)
+                        .onFocusChanged { firstButtonHasFocus.value = it.isFocused }
+                ) {
                     Text("Open app settings")
                 }
             } else {
-                    Button(onClick = onAllow, modifier = Modifier.focusRequester(firstButton)) {
+                Button(
+                    onClick = onAllow,
+                    modifier = Modifier
+                        .focusRequester(firstButton)
+                        .onFocusChanged { firstButtonHasFocus.value = it.isFocused }
+                ) {
                     Text("Allow Nearby devices")
                 }
             }
