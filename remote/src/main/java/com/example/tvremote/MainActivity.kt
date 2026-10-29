@@ -17,6 +17,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -473,9 +474,10 @@ private fun SetupForm(
             enabled = !checking,
             modifier = Modifier.fillMaxWidth()
         )
+        val dividerColor = MaterialTheme.colorScheme.onSurfaceVariant
         Text(
            text = "OR",
-           color = MaterialTheme.colorScheme.onSurfaceVariant,
+           color = dividerColor,
            textAlign = TextAlign.Center,
            modifier = Modifier
         .fillMaxWidth(0.9f)
@@ -491,14 +493,14 @@ private fun SetupForm(
             val rightLineStart = (size.width / 2) + (textWidth / 2) + textGap
 
             drawLine(
-                color = color.copy(alpha = 0.4f),
+                color = dividerColor.copy(alpha = 0.4f),
                 start = Offset(0f, centerY),
                 end = Offset(leftLineEnd, centerY),
                 strokeWidth = strokeWidth
             )
 
             drawLine(
-                color = color.copy(alpha = 0.4f),
+                color = dividerColor.copy(alpha = 0.4f),
                 start = Offset(rightLineStart, centerY),
                 end = Offset(size.width, centerY),
                 strokeWidth = strokeWidth
