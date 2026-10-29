@@ -26,7 +26,9 @@ import androidx.compose.foundation.lazy.grid.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusProperties
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
@@ -50,10 +52,19 @@ class MainActivity : ComponentActivity() {
         const val TAG = "MainActivity"
         const val ACTION_INSTALL_COMPLETE = "com.example.tvdash.INSTALL_COMPLETE"
         const val PREF_BLUETOOTH_PERMISSION_REQUESTED = "bluetooth_connect_permission_requested"
+        const val PREF_BLUETOOTH_PERMISSION_OVERLAY_DISMISSED = "bluetooth_permission_overlay_dismissed"
     }
 
     private var restrictedSettingsPrompted = false
-    private var permissionOverlayDismissed = false
+    private var permissionOverlayDismissed: Boolean
+        get() = getSharedPreferences("tvdash", Context.MODE_PRIVATE)
+            .getBoolean(PREF_BLUETOOTH_PERMISSION_OVERLAY_DISMISSED, false)
+        set(value) {
+            getSharedPreferences("tvdash", Context.MODE_PRIVATE)
+                .edit()
+                .putBoolean(PREF_BLUETOOTH_PERMISSION_OVERLAY_DISMISSED, value)
+                .apply()
+        }
     private var showBluetoothPermissionRationale by mutableStateOf(false)
     private var bluetoothPermissionPermanentlyDenied by mutableStateOf(false)
 
@@ -68,12 +79,22 @@ class MainActivity : ComponentActivity() {
         ContextCompat.startForegroundService(this, Intent(this, RemoteService::class.java))
         refreshBluetoothPermission(showOverlay = true)
         setContent {
+            val dashboardFocusRequester = remember { FocusRequester() }
+            LaunchedEffect(showBluetoothPermissionRationale) {
+                if (!showBluetoothPermissionRationale) {
+                    delay(150)
+                    val focusRequested = runCatching {
+                        dashboardFocusRequester.requestFocus()
+                    }.isSuccess
+                    if (!focusRequested) Log.w(TAG, "Could not request dashboard focus")
+                }
+            }
             MaterialTheme(colorScheme = darkColorScheme()) {
-                                Box(Modifier.fillMaxSize()) {
+                Box(Modifier.fillMaxSize()) {
                     Box(
                         Modifier.fillMaxSize()
                             .focusProperties { canFocus = !showBluetoothPermissionRationale }
-                    ) { HomeScreen() }
+                    ) { HomeScreen(dashboardFocusRequester) }
                     if (showBluetoothPermissionRationale) {
                         BluetoothPermissionRationaleOverlay(
                             permanentlyDenied = bluetoothPermissionPermanentlyDenied,
@@ -116,6 +137,7 @@ class MainActivity : ComponentActivity() {
         val bluetoothPermissionGranted =
             checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT) == PackageManager.PERMISSION_GRANTED
         if (bluetoothPermissionGranted) {
+            permissionOverlayDismissed = false
             bluetoothPermissionPermanentlyDenied = false
             showBluetoothPermissionRationale = false
             return
@@ -247,7 +269,7 @@ object Trim { var level by mutableIntStateOf(0) }
 
 
 @Composable
-fun HomeScreen() {
+fun HomeScreen(dashboardFocusRequester: FocusRequester) {
     val ctx = LocalContext.current
     val upd = remember { UpdateController(ctx, "TvDash.apk") }
     val scope = rememberCoroutineScope()
@@ -305,7 +327,7 @@ fun HomeScreen() {
             Row(horizontalArrangement = Arrangement.spacedBy(20.dp), modifier = Modifier.fillMaxWidth()) {
                 DashCard("Time", status.time.format(DateTimeFormatter.ofPattern("h:mm a")),
                     status.time.format(DateTimeFormatter.ofPattern("EEEE, MMM d")),
-                    Modifier.weight(1f)) { openSettings(ctx, Settings.ACTION_DATE_SETTINGS) }
+                    Modifier.weight(1f).focusRequester(dashboardFocusRequester)) { openSettings(ctx, Settings.ACTION_DATE_SETTINGS) }
                 DashCard("Network", status.network, "Tap for settings", Modifier.weight(1f)) {
                     openSettings(ctx, Settings.ACTION_WIFI_SETTINGS)
                 }
