@@ -17,6 +17,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
@@ -473,47 +474,37 @@ private fun SetupForm(
             modifier = Modifier.fillMaxWidth()
         )
         Text(
-             text = "OR", // Capitalized to match your image
-             color = MaterialTheme.colorScheme.onSurfaceVariant,
-             textAlign = TextAlign.Center,
-             modifier = Modifier.fillMaxWidth(0.9f) // Restricts the component to exactly 90% screen width
-             .align(Alignment.CenterHorizontally) // Centers it perfectly inside your Column
-             .padding(vertical = 16.dp) // Adjust breathing room above/below the divider
-             .drawBehind {
-             val strokeWidth = 1.dp.toPx() // Adjust line thickness here
-             val centerY = size.height / 2
-            
-             // Gap size between the line endings and the text bounds
-             val textGap = 12.dp.toPx() 
-
-             // Get the actual width of the rendered text dynamically
-             // If text layout isn't ready yet, defaults to a safe fallback
-             val textWidth = drawContext.canvas.nativeCanvas.let { _ ->
-                // Approximate width calculation based on text bounds
-                // Ensures compatibility across all versions of Compose
-                (size.width * 0.15f) 
-            }
+           text = "OR",
+           color = MaterialTheme.colorScheme.onSurfaceVariant,
+           textAlign = TextAlign.Center,
+           modifier = Modifier
+        .fillMaxWidth(0.9f)
+        .align(Alignment.CenterHorizontally)
+        .padding(vertical = 16.dp)
+        .drawBehind {
+            val strokeWidth = 1.dp.toPx()
+            val centerY = size.height / 2
+            val textGap = 12.dp.toPx()
+            val textWidth = size.width * 0.15f
 
             val leftLineEnd = (size.width / 2) - (textWidth / 2) - textGap
             val rightLineStart = (size.width / 2) + (textWidth / 2) + textGap
 
-            // Left Line
             drawLine(
-                color = color.copy(alpha = 0.4f), // Softens the divider line like in the image
+                color = color.copy(alpha = 0.4f),
                 start = Offset(0f, centerY),
                 end = Offset(leftLineEnd, centerY),
                 strokeWidth = strokeWidth
             )
 
-            // Right Line
             drawLine(
-                color = color.copy(alpha = 0.4f), 
+                color = color.copy(alpha = 0.4f),
                 start = Offset(rightLineStart, centerY),
                 end = Offset(size.width, centerY),
                 strokeWidth = strokeWidth
             )
-            }
-        )
+        }
+     )
 
         FitOutlinedButton(
             label = "Set up Bluetooth",
