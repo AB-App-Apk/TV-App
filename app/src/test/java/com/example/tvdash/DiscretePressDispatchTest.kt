@@ -1,7 +1,6 @@
 package com.example.tvdash
 
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class DiscretePressDispatchTest {
@@ -48,15 +47,42 @@ class DiscretePressDispatchTest {
     }
 
     @Test
-    fun longOkDoesNotFallBackToShortSelect() {
+    fun longOkPreservesNoFocusResult() {
+        val result = DiscretePressDispatch.longOk {
+            DiscretePressResult.NO_FOCUS
+        }
+
+        assertEquals(DiscretePressResult.NO_FOCUS, result)
+    }
+
+    @Test
+    fun longOkPreservesUnsupportedResultWithoutFallback() {
         var longClickCalls = 0
 
         val result = DiscretePressDispatch.longOk {
             longClickCalls++
-            false
+            DiscretePressResult.LONG_CLICK_UNSUPPORTED
         }
 
         assertEquals(DiscretePressResult.LONG_CLICK_UNSUPPORTED, result)
-        assertTrue(longClickCalls == 1)
+        assertEquals(1, longClickCalls)
+    }
+
+    @Test
+    fun longOkPreservesActionExecutionFailure() {
+        val result = DiscretePressDispatch.longOk {
+            DiscretePressResult.ACTION_FAILED
+        }
+
+        assertEquals(DiscretePressResult.ACTION_FAILED, result)
+    }
+
+    @Test
+    fun longOkPreservesSuccess() {
+        val result = DiscretePressDispatch.longOk {
+            DiscretePressResult.SUCCESS
+        }
+
+        assertEquals(DiscretePressResult.SUCCESS, result)
     }
 }
