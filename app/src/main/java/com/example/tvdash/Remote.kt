@@ -511,7 +511,7 @@ class RemoteService : Service() {
                 when {
                     service == null -> "no-a11y"
                     longPress -> DiscretePressDispatch.longOk {
-                        service.performFocusedLongClick()
+                        service.performFocusedLongClickResult()
                     }.wireValue
                     else -> DiscretePressDispatch.shortOk(
                         focusedClick = { service.performFocusedClick() },
