@@ -478,9 +478,31 @@ class ConnectionManager(
                         heldKeyById.remove(holdId)?.let { key ->
                             if (!cancelled) {
                                 val reply = link.get(com.example.tvlink.RemotePressProtocol.path(holdId, key, longPress))
-                                if (reply is TvReply.Unreachable) {
-                                    setDash(false)
-                                    dashNudge.trySend(Unit)
+                                when (reply) {
+                                    TvReply.Unreachable -> {
+                                        setDash(false)
+                                        dashNudge.trySend(Unit)
+                                        _hint.value = "TV Dash could not be reached. Check the TV connection."
+                                    }
+                                    is TvReply.Rejected -> noteDashRejected(reply.http)
+                                    is TvReply.Ok -> {
+                                        setDash(true)
+                                        when (reply.body.trim()) {
+                                            "ok" -> _hint.value = ""
+                                            "no-a11y" -> _hint.value =
+                                                "TV Dash's accessibility service is unavailable. Enable it in TV settings."
+                                            "no-focus" -> _hint.value =
+                                                "The TV has no focused control to select. Move the D-pad highlight and try again."
+                                            "no-long-click" -> _hint.value =
+                                                "This app does not expose a long-press action for the selected control."
+                                            "action-failed" -> _hint.value =
+                                                "The TV could not perform that button action. Try again."
+                                            "bad-press" -> _hint.value =
+                                                "The TV rejected the remote button request. Reconnect the remote."
+                                            else -> _hint.value =
+                                                "TV Dash returned an unexpected button result: ${reply.body.trim().take(80)}"
+                                        }
+                                    }
                                 }
                             }
                         }
