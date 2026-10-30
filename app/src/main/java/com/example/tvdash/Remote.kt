@@ -508,12 +508,18 @@ class RemoteService : Service() {
             }
             com.example.tvlink.HeldRemoteKey.OK -> {
                 val service = PowerAccessibilityService.instance
-                val performed = when {
-                    service == null -> false
-                    longPress -> service.performFocusedLongClick()
-                    else -> service.performFocusedClick()
+                when {
+                    service == null -> "no-a11y"
+                    longPress -> DiscretePressDispatch.longOk {
+                        service.performFocusedLongClick()
+                    }.wireValue
+                    else -> DiscretePressDispatch.shortOk(
+                        focusedClick = { service.performFocusedClick() },
+                        fallbackDpadCenter = {
+                            service.performGlobalAction(AccessibilityService.GLOBAL_ACTION_DPAD_CENTER)
+                        }
+                    ).wireValue
                 }
-                if (performed) "ok" else if (service == null) "no-a11y" else "no-focus"
             }
             else -> "bad-press"
         }
@@ -583,7 +589,7 @@ class RemoteService : Service() {
                     else -> return "ok"
                 }
                 if (svc == null) return "no-a11y"
-                svc.performGlobalAction(action)
+                if (!svc.performGlobalAction(action)) return "action-failed"
             }
         }
         return "ok"
