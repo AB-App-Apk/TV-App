@@ -86,7 +86,7 @@ class MainActivity : ComponentActivity() {
                     delay(150)
                     val focusRequested = runCatching {
                         dashboardFocusRequester.requestFocus()
-                    }.isSuccess
+                    }.getOrDefault(false)
                     if (!focusRequested) Log.w(TAG, "Could not request dashboard focus")
                 }
             }
