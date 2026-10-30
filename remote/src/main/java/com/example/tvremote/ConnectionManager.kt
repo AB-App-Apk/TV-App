@@ -345,6 +345,15 @@ class ConnectionManager(
                 }
             }
 
+            // Without Bluetooth HID, Back/OK are classified entirely on the phone. Reserve the
+            // input gate now, but send no network traffic until release yields the final intent.
+            if (key == HeldRemoteKey.BACK || key == HeldRemoteKey.OK) {
+                heldKeyById[holdId] = key
+                trackHeld(holdId, HeldRoad.TAP)
+                keepGate = true
+                return true
+            }
+
             if (
                 key == HeldRemoteKey.FORWARD || key == HeldRemoteKey.REWIND ||
                 key == HeldRemoteKey.UP || key == HeldRemoteKey.DOWN ||
@@ -431,7 +440,7 @@ class ConnectionManager(
                 HeldRoad.KEYBOARD -> keyboardLink.endHeldInput(holdId)
                 HeldRoad.DASH, HeldRoad.UNCERTAIN_DASH ->
                     link.get(HeldInputProtocol.path(holdId, key, HeldAction.CANCEL))
-                HeldRoad.TAP -> Unit
+                HeldRoad.TAP -> heldKeyById.remove(holdId)
             }
         } finally {
             releaseHeldGate(lease)
@@ -439,14 +448,15 @@ class ConnectionManager(
     }
 
     /** Ends the exact route chosen by [beginHeldInput]; duplicate UPs are harmless. */
-    suspend fun endHeldInput(holdId: String, cancelled: Boolean = false) {
-        endHeldInput(holdId, fromWatchdog = false, cancelled = cancelled)
+    suspend fun endHeldInput(holdId: String, cancelled: Boolean = false, longPress: Boolean = false) {
+        endHeldInput(holdId, fromWatchdog = false, cancelled = cancelled, longPress = longPress)
     }
 
     private suspend fun endHeldInput(
         holdId: String,
         fromWatchdog: Boolean,
-        cancelled: Boolean = fromWatchdog
+        cancelled: Boolean = fromWatchdog,
+        longPress: Boolean = false
     ) {
         heldLifecycleLock.withLock {
             heldRenewals.remove(holdId)?.cancel()
@@ -464,10 +474,20 @@ class ConnectionManager(
                             link.get(HeldInputProtocol.path(holdId, key, action))
                         }
                     }
-                    HeldRoad.TAP -> Unit
+                    HeldRoad.TAP -> {
+                        heldKeyById.remove(holdId)?.let { key ->
+                            if (!cancelled) {
+                                val reply = link.get(com.example.tvlink.RemotePressProtocol.path(holdId, key, longPress))
+                                if (reply is TvReply.Unreachable) {
+                                    setDash(false)
+                                    dashNudge.trySend(Unit)
+                                }
+                            }
+                        }
+                    }
                 }
             } finally {
-                if (road == HeldRoad.KEYBOARD || road == HeldRoad.DASH || road == HeldRoad.UNCERTAIN_DASH) releaseHeldGate()
+                releaseHeldGate()
             }
         }
     }
