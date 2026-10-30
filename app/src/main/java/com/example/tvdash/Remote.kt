@@ -495,13 +495,13 @@ class RemoteService : Service() {
     private fun handleDiscretePress(id: String?, keyName: String?, action: String?): String {
         if (id == null || !com.example.tvlink.HeldInputProtocol.isValidHoldId(id)) return "bad-press"
         completedPresses[id]?.let { return it }
-        val key = com.example.tvlink.HeldRemoteKey.fromWire(keyName)
-        if (key != com.example.tvlink.HeldRemoteKey.BACK && key != com.example.tvlink.HeldRemoteKey.OK) return "bad-press"
+        val heldKey = com.example.tvlink.HeldRemoteKey.fromWire(keyName)
+        if (heldKey != com.example.tvlink.HeldRemoteKey.BACK && heldKey != com.example.tvlink.HeldRemoteKey.OK) return "bad-press"
         if (action != com.example.tvlink.RemotePressProtocol.ACTION_TAP &&
             action != com.example.tvlink.RemotePressProtocol.ACTION_LONG) return "bad-press"
 
         val longPress = action == com.example.tvlink.RemotePressProtocol.ACTION_LONG
-        val result = when (key) {
+        val result = when (heldKey) {
             com.example.tvlink.HeldRemoteKey.BACK -> {
                 // There is no generic Accessibility global LONG_BACK action. Long Back is deliberately mapped to Home.
                 key(if (longPress) "home" else "back")
