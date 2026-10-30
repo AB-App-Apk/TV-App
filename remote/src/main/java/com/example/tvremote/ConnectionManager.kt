@@ -141,6 +141,9 @@ class ConnectionManager(
         /** A typing session with no activity for this long is over; its text is never edited again. */
         const val SESSION_IDLE_MS = 10_000L
 
+        /** Safety bound for a phone-classified Back/OK touch that never delivers its release callback. */
+        const val DISCRETE_PRESS_MAX_MS = 15_000L
+
         /** After TV Dash cannot take typing (no keyboard set, no text box), do not ask it again for this long. */
         const val DASH_TYPING_PAUSE_MS = 10_000L
 
@@ -516,7 +519,11 @@ class ConnectionManager(
 
     private fun trackHeld(holdId: String, road: HeldRoad) {
         heldRoutes[holdId] = road
-        if (road != HeldRoad.TAP || !heldKeyById.containsKey(holdId)) scheduleHeldTimeout(holdId)
+        if (road == HeldRoad.TAP && heldKeyById.containsKey(holdId)) {
+            scheduleHeldTimeout(holdId, DISCRETE_PRESS_MAX_MS)
+        } else {
+            scheduleHeldTimeout(holdId)
+        }
 
         // The lease is renewed only while the captured touch remains active. If renewal stops, the independent
         // timeout still releases the phone-side hold; the TV has its own matching four-second network watchdog.
@@ -562,10 +569,13 @@ class ConnectionManager(
     }
 
     /** Reschedules the independent phone-side safety deadline after a successful lease renewal. */
-    private fun scheduleHeldTimeout(holdId: String) {
+    private fun scheduleHeldTimeout(
+        holdId: String,
+        timeoutMs: Long = HeldInputProtocol.WATCHDOG_TIMEOUT_MS
+    ) {
         lateinit var timeout: Job
         timeout = scope.launch {
-            delay(HeldInputProtocol.WATCHDOG_TIMEOUT_MS)
+            delay(timeoutMs)
             if (heldTimeouts[holdId] === timeout) {
                 endHeldInput(holdId, fromWatchdog = true)
             }
