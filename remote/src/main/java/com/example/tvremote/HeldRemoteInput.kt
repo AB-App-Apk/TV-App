@@ -19,7 +19,7 @@ import java.util.UUID
 fun Modifier.heldRemoteInput(
     key: HeldRemoteKey,
     onDown: (HeldRemoteKey, String) -> Unit,
-    onUp: (HeldRemoteKey, String, Boolean) -> Unit
+    onUp: (HeldRemoteKey, String, Boolean, Boolean) -> Unit
 ): Modifier {
     val latestDown = rememberUpdatedState(onDown)
     val latestUp = rememberUpdatedState(onUp)
@@ -35,6 +35,8 @@ fun Modifier.heldRemoteInput(
                 val holdId = UUID.randomUUID().toString()
                 latestDown.value(key, holdId)
                 var cancelled = true
+                var longPress = false
+                val downTime = down.uptimeMillis
                 try {
                     while (true) {
                         val event = awaitPointerEvent(pass = PointerEventPass.Initial)
@@ -53,6 +55,7 @@ fun Modifier.heldRemoteInput(
                         if (change.previousPressed && !change.pressed) {
                             change.consume()
                             cancelled = false
+                            longPress = change.uptimeMillis - downTime >= viewConfiguration.longPressTimeoutMillis
                             break
                         }
                         if (!change.pressed) break
@@ -60,7 +63,7 @@ fun Modifier.heldRemoteInput(
                 } finally {
                     // A physical UP is accepted even if another handler consumed it. Leaving the button bounds,
                     // a second pointer, or coroutine disposal still cancels the gesture.
-                    latestUp.value(key, holdId, cancelled)
+                    latestUp.value(key, holdId, cancelled, longPress)
                 }
             }
         }

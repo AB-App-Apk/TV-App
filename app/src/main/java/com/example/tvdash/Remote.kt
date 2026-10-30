@@ -42,6 +42,7 @@ import java.net.InetSocketAddress
 import java.net.ServerSocket
 import java.net.Socket
 import java.security.SecureRandom
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.ArrayBlockingQueue
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
@@ -245,6 +246,9 @@ class RemoteService : Service() {
     /** Shared by Wi-Fi and Bluetooth, with independent attempt histories for each client. */
     private val pinLimiter = PinAttemptLimiter()
 
+    /** Recently completed discrete presses; a retry after a lost HTTP response must not execute twice. */
+    private val completedPresses = ConcurrentHashMap<String, String>()
+
     /** Network-held media and vertical-navigation inputs; unmatched holds expire after the safety timeout. */
     private val heldKeyWatchdog = HeldKeyWatchdog(
         onDown = { key, downTime ->
@@ -445,6 +449,11 @@ class RemoteService : Service() {
     }
 
     private fun route(u: Uri): String = when (u.path) {
+        "/press" -> handleDiscretePress(
+            u.getQueryParameter("id"),
+            u.getQueryParameter("key"),
+            u.getQueryParameter("action")
+        )
         "/hold" -> {
             val holdId = u.getQueryParameter("id")
             val key = com.example.tvlink.HeldRemoteKey.fromWire(u.getQueryParameter("key"))
@@ -476,6 +485,43 @@ class RemoteService : Service() {
         "/launch" -> { launch(u.getQueryParameter("pkg") ?: ""); "ok" }
         "/yt" -> youtube(u)
         else -> "ok"
+    }
+
+    /**
+     * Executes one phone-classified Back/OK gesture. The request id makes a repeated request idempotent
+     * when the first response was lost during a Wi-Fi/Bluetooth carrier transition.
+     */
+    @Synchronized
+    private fun handleDiscretePress(id: String?, keyName: String?, action: String?): String {
+        if (id == null || !com.example.tvlink.HeldInputProtocol.isValidHoldId(id)) return "bad-press"
+        completedPresses[id]?.let { return it }
+        val heldKey = com.example.tvlink.HeldRemoteKey.fromWire(keyName)
+        if (heldKey != com.example.tvlink.HeldRemoteKey.BACK && heldKey != com.example.tvlink.HeldRemoteKey.OK) return "bad-press"
+        if (action != com.example.tvlink.RemotePressProtocol.ACTION_TAP &&
+            action != com.example.tvlink.RemotePressProtocol.ACTION_LONG) return "bad-press"
+
+        val longPress = action == com.example.tvlink.RemotePressProtocol.ACTION_LONG
+        val result = when (heldKey) {
+            com.example.tvlink.HeldRemoteKey.BACK -> {
+                // There is no generic Accessibility global LONG_BACK action. Long Back is deliberately mapped to Home.
+                key(if (longPress) "home" else "back")
+            }
+            com.example.tvlink.HeldRemoteKey.OK -> {
+                val service = PowerAccessibilityService.instance
+                val performed = when {
+                    service == null -> false
+                    longPress -> service.performFocusedLongClick()
+                    else -> service.performFocusedClick()
+                }
+                if (performed) "ok" else if (service == null) "no-a11y" else "no-focus"
+            }
+            else -> "bad-press"
+        }
+        completedPresses[id] = result
+        if (completedPresses.size > 256) {
+            completedPresses.keys.firstOrNull { it != id }?.let { completedPresses.remove(it) }
+        }
+        return result
     }
 
     /** Mute by setting volume to 0 and restoring it later; works even when the TV ignores stream mute. */

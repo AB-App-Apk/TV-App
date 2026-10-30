@@ -419,7 +419,7 @@ private fun SystemRow(viewModel: RemoteViewModel) {
             Modifier.weight(1f).heldRemoteInput(
                 HeldRemoteKey.BACK,
                 viewModel::onHeldInputDown
-            ) { _, holdId, cancelled -> viewModel.onHeldInputUp(holdId, cancelled) }
+            ) { _, holdId, cancelled, longPress -> viewModel.onHeldInputUp(holdId, cancelled, longPress) }
         ) { viewModel.onBackClicked() }
         RemoteButton(Ico.Home, "Home", Modifier.weight(1f)) { viewModel.onHomeClicked() }
         RemoteButton(Ico.Settings, "Settings", Modifier.weight(1f)) { viewModel.onSettingsClicked() }
@@ -439,7 +439,7 @@ private fun DirectionPad(viewModel: RemoteViewModel) {
             modifier = Modifier.heldRemoteInput(
                 HeldRemoteKey.UP,
                 viewModel::onHeldInputDown
-            ) { _, holdId, cancelled -> viewModel.onHeldInputUp(holdId, cancelled) }
+            ) { _, holdId, cancelled, longPress -> viewModel.onHeldInputUp(holdId, cancelled, longPress) }
         ) { viewModel.onDpadUp() }
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
             DKey(Ico.Left) { viewModel.onDpadLeft() }
@@ -449,7 +449,7 @@ private fun DirectionPad(viewModel: RemoteViewModel) {
                 modifier = Modifier.size(88.dp).heldRemoteInput(
                     HeldRemoteKey.OK,
                     viewModel::onHeldInputDown
-                ) { _, holdId, cancelled -> viewModel.onHeldInputUp(holdId, cancelled) },
+                ) { _, holdId, cancelled, longPress -> viewModel.onHeldInputUp(holdId, cancelled, longPress) },
                 shape = CircleShape,
                 textStyle = MaterialTheme.typography.titleLarge
             )
@@ -460,7 +460,7 @@ private fun DirectionPad(viewModel: RemoteViewModel) {
             modifier = Modifier.heldRemoteInput(
                 HeldRemoteKey.DOWN,
                 viewModel::onHeldInputDown
-            ) { _, holdId, cancelled -> viewModel.onHeldInputUp(holdId, cancelled) }
+            ) { _, holdId, cancelled, longPress -> viewModel.onHeldInputUp(holdId, cancelled, longPress) }
         ) { viewModel.onDpadDown() }
     }
 }
@@ -474,7 +474,7 @@ private fun MediaRow(viewModel: RemoteViewModel, onKeyboardClicked: () -> Unit) 
             Modifier.weight(1f).heldRemoteInput(
                 HeldRemoteKey.REWIND,
                 viewModel::onHeldInputDown
-            ) { _, holdId, cancelled -> viewModel.onHeldInputUp(holdId, cancelled) }
+            ) { _, holdId, cancelled, longPress -> viewModel.onHeldInputUp(holdId, cancelled, longPress) }
         ) { viewModel.onRewindClicked() }
         RemoteButton(Ico.Keyboard, "Keyboard", Modifier.weight(1f)) { onKeyboardClicked() }
         RemoteButton(
@@ -483,7 +483,7 @@ private fun MediaRow(viewModel: RemoteViewModel, onKeyboardClicked: () -> Unit) 
             Modifier.weight(1f).heldRemoteInput(
                 HeldRemoteKey.FORWARD,
                 viewModel::onHeldInputDown
-            ) { _, holdId, cancelled -> viewModel.onHeldInputUp(holdId, cancelled) }
+            ) { _, holdId, cancelled, longPress -> viewModel.onHeldInputUp(holdId, cancelled, longPress) }
         ) { viewModel.onForwardClicked() }
     }
 }
