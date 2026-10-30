@@ -569,9 +569,20 @@ class RemoteService : Service() {
         when (k) {
             "home" -> {
                 wake()
-                if (Settings.canDrawOverlays(this)) dashboard()
-                else if (svc != null) svc.performGlobalAction(AccessibilityService.GLOBAL_ACTION_HOME)
-                else return "no-a11y"
+                if (Settings.canDrawOverlays(this)) {
+                    try {
+                        dashboard()
+                    } catch (t: Throwable) {
+                        Log.w("Remote", "Could not open TV Dash", t)
+                        return "action-failed"
+                    }
+                } else if (svc != null) {
+                    if (!svc.performGlobalAction(AccessibilityService.GLOBAL_ACTION_HOME)) {
+                        return "action-failed"
+                    }
+                } else {
+                    return "no-a11y"
+                }
             }
             "settings" -> {
                 if (!Settings.canDrawOverlays(this)) return "no-overlay"
