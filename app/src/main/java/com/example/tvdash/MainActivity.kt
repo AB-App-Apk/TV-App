@@ -80,6 +80,7 @@ class MainActivity : ComponentActivity() {
         refreshBluetoothPermission(showOverlay = true)
         setContent {
             val dashboardFocusRequester = remember { FocusRequester() }
+            val dashboardFocusScope = rememberCoroutineScope()
             LaunchedEffect(showBluetoothPermissionRationale) {
                 if (!showBluetoothPermissionRationale) {
                     delay(150)
@@ -87,6 +88,19 @@ class MainActivity : ComponentActivity() {
                         dashboardFocusRequester.requestFocus()
                     }.isSuccess
                     if (!focusRequested) Log.w(TAG, "Could not request dashboard focus")
+                }
+            }
+            // A system Back action can return to TV Dash without recreating this composition.
+            // Re-request D-pad focus after the resumed activity has had time to regain its window.
+            LifecycleEventEffect(Lifecycle.Event.ON_RESUME) {
+                dashboardFocusScope.launch {
+                    delay(180)
+                    if (!showBluetoothPermissionRationale) {
+                        val focusRequested = runCatching {
+                            dashboardFocusRequester.requestFocus()
+                        }.getOrDefault(false)
+                        if (!focusRequested) Log.w(TAG, "Could not restore dashboard focus after resume")
+                    }
                 }
             }
             MaterialTheme(colorScheme = darkColorScheme()) {
