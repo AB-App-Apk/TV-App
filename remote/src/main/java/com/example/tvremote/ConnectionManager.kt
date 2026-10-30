@@ -494,7 +494,7 @@ class ConnectionManager(
 
     private fun trackHeld(holdId: String, road: HeldRoad) {
         heldRoutes[holdId] = road
-        scheduleHeldTimeout(holdId)
+        if (road != HeldRoad.TAP || !heldKeyById.containsKey(holdId)) scheduleHeldTimeout(holdId)
 
         // The lease is renewed only while the captured touch remains active. If renewal stops, the independent
         // timeout still releases the phone-side hold; the TV has its own matching four-second network watchdog.
