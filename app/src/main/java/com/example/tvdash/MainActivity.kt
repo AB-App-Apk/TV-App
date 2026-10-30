@@ -86,7 +86,7 @@ class MainActivity : ComponentActivity() {
                     delay(150)
                     val focusRequested = runCatching {
                         dashboardFocusRequester.requestFocus()
-                    }.getOrDefault(false)
+                    }.isSuccess
                     if (!focusRequested) Log.w(TAG, "Could not request dashboard focus")
                 }
             }
@@ -98,7 +98,7 @@ class MainActivity : ComponentActivity() {
                     if (!showBluetoothPermissionRationale) {
                         val focusRequested = runCatching {
                             dashboardFocusRequester.requestFocus()
-                        }.getOrDefault(false)
+                        }.isSuccess
                         if (!focusRequested) Log.w(TAG, "Could not restore dashboard focus after resume")
                     }
                 }
