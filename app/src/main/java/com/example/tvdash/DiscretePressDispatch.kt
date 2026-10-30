@@ -6,8 +6,9 @@ package com.example.tvdash
  */
 internal enum class DiscretePressResult(val wireValue: String) {
     SUCCESS("ok"),
-    ACTION_FAILED("action-failed"),
-    LONG_CLICK_UNSUPPORTED("no-long-click")
+    NO_FOCUS("no-focus"),
+    LONG_CLICK_UNSUPPORTED("no-long-click"),
+    ACTION_FAILED("action-failed")
 }
 
 internal object DiscretePressDispatch {
@@ -23,10 +24,7 @@ internal object DiscretePressDispatch {
         }
     }
 
-    fun longOk(focusedLongClick: () -> Boolean): DiscretePressResult =
-        if (focusedLongClick()) {
-            DiscretePressResult.SUCCESS
-        } else {
-            DiscretePressResult.LONG_CLICK_UNSUPPORTED
-        }
+    /** Pass through a genuine long-click outcome. There is intentionally no short-select fallback. */
+    fun longOk(focusedLongClick: () -> DiscretePressResult): DiscretePressResult =
+        focusedLongClick()
 }
