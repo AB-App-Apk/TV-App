@@ -2,7 +2,6 @@ package com.example.tvremote
 
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
-import androidx.compose.foundation.gestures.waitForUpOrCancellation
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Modifier
@@ -37,14 +36,30 @@ fun Modifier.heldRemoteInput(
                 latestDown.value(key, holdId)
                 var cancelled = true
                 try {
-                    val up = waitForUpOrCancellation(pass = PointerEventPass.Initial)
-                    if (up != null) {
-                        up.consume()
-                        cancelled = false
+                    while (true) {
+                        val event = awaitPointerEvent(pass = PointerEventPass.Initial)
+                        val change = event.changes.firstOrNull { it.id == down.id } ?: break
+
+                        // A sibling/parent click handler can consume the UP during the Initial pass. That is not
+                        // a cancelled touch: Back/OK deliberately dispatch their tap after release, so dropping
+                        // a consumed UP here makes those buttons appear dead over Wi-Fi.
+                        if (event.changes.any { it.id != down.id && it.pressed }) break
+                        val position = change.position
+                        if (
+                            position.x < 0f || position.y < 0f ||
+                            position.x >= size.width.toFloat() || position.y >= size.height.toFloat()
+                        ) break
+
+                        if (change.previousPressed && !change.pressed) {
+                            change.consume()
+                            cancelled = false
+                            break
+                        }
+                        if (!change.pressed) break
                     }
                 } finally {
-                    // Distinguish a real finger-up from cancellation/disposal. The TV must release either way,
-                    // but only a real UP may be interpreted as a short Back/OK tap.
+                    // A physical UP is accepted even if another handler consumed it. Leaving the button bounds,
+                    // a second pointer, or coroutine disposal still cancels the gesture.
                     latestUp.value(key, holdId, cancelled)
                 }
             }
