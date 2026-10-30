@@ -60,6 +60,6 @@ object RemotePressProtocol {
         require(HeldInputProtocol.isValidHoldId(requestId)) { "Invalid press request identifier" }
         require(key == HeldRemoteKey.BACK || key == HeldRemoteKey.OK) { "Only Back and OK have discrete press actions" }
         val action = if (longPress) ACTION_LONG else ACTION_TAP
-        return "press?id=$requestId&key=\${key.wireName}&action=$action"
+        return "press?id=$requestId&key=${key.wireName}&action=$action"
     }
 }
