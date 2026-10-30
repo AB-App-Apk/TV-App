@@ -113,6 +113,7 @@ class PowerAccessibilityService : AccessibilityService() {
         return try {
             val root = rootInActiveWindow ?: return false
             val focused = root.findFocus(AccessibilityNodeInfo.FOCUS_ACCESSIBILITY)
+                ?: root.findFocus(AccessibilityNodeInfo.FOCUS_INPUT)
                 ?: findViewFocusedNode(root, 0)
             focused?.performAction(AccessibilityNodeInfo.ACTION_CLICK) == true
         } catch (t: Throwable) {
