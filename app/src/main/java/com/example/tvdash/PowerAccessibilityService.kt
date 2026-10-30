@@ -118,25 +118,36 @@ class PowerAccessibilityService : AccessibilityService() {
     }
 
     /**
+     * Legacy Boolean API retained for the older held-key watchdog.
+     * The discrete Wi-Fi route uses [performFocusedLongClickResult] so it can report the
+     * difference between missing focus, unsupported long-click, and execution failure.
+     */
+    fun performFocusedLongClick(): Boolean =
+        performFocusedLongClickResult() == DiscretePressResult.SUCCESS
+
+    /**
      * Performs a genuine long-click only when the selected accessibility node advertises support.
      * It deliberately does not substitute a normal click or D-pad center when long-click is unavailable.
      */
-    fun performFocusedLongClick(): Boolean {
+    fun performFocusedLongClickResult(): DiscretePressResult {
         return try {
-            val focused = findFocusedNode() ?: return false
+            val focused = findFocusedNode()
+                ?: return DiscretePressResult.NO_FOCUS
+
             val longClickId = AccessibilityNodeInfo.AccessibilityAction.ACTION_LONG_CLICK.id
             val supported = focused.isLongClickable ||
                 focused.actionList.any { it.id == longClickId }
             if (!supported) {
                 Log.i(TAG, "focused node does not support long-click package=${focused.packageName} class=${focused.className}")
-                return false
+                return DiscretePressResult.LONG_CLICK_UNSUPPORTED
             }
+
             val performed = focused.performAction(AccessibilityNodeInfo.ACTION_LONG_CLICK)
             Log.i(TAG, "focused long-click package=${focused.packageName} class=${focused.className} performed=$performed")
-            performed
+            if (performed) DiscretePressResult.SUCCESS else DiscretePressResult.ACTION_FAILED
         } catch (t: Throwable) {
             Log.w(TAG, "focused long-click failed", t)
-            false
+            DiscretePressResult.ACTION_FAILED
         }
     }
 
