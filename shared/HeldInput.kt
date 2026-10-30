@@ -46,3 +46,20 @@ object HeldInputProtocol {
         return "hold?id=$holdId&key=${key.wireName}&action=${action.wireName}"
     }
 }
+
+
+/**
+ * One completed Back/OK gesture. It deliberately carries the final intent rather than a streamed key state.
+ * The request id also makes retries across Wi-Fi/Bluetooth carrier handover idempotent on the TV.
+ */
+object RemotePressProtocol {
+    const val ACTION_TAP = "tap"
+    const val ACTION_LONG = "long"
+
+    fun path(requestId: String, key: HeldRemoteKey, longPress: Boolean): String {
+        require(HeldInputProtocol.isValidHoldId(requestId)) { "Invalid press request identifier" }
+        require(key == HeldRemoteKey.BACK || key == HeldRemoteKey.OK) { "Only Back and OK have discrete press actions" }
+        val action = if (longPress) ACTION_LONG else ACTION_TAP
+        return "press?id=$requestId&key=\${key.wireName}&action=$action"
+    }
+}
