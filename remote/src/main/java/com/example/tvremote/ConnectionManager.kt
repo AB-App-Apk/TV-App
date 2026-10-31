@@ -319,7 +319,24 @@ class ConnectionManager(
     private suspend fun beginHeldInputLocked(holdId: String, key: HeldRemoteKey): Boolean {
         if (!started || !HeldInputProtocol.isValidHoldId(holdId)) return false
         if (heldRoutes.containsKey(holdId)) return true
-        if (heldRoutes.isNotEmpty()) return false
+
+        // Touch UP callbacks and the next DOWN can arrive in adjacent UI frames. Their ViewModel
+        // coroutines are independent, so the new DOWN may acquire this lock before the old UP.
+        // Never silently reject the new input: release any previous route first, then accept it.
+        if (heldRoutes.isNotEmpty()) {
+            val previousHoldIds = heldRoutes.keys.toList()
+            Log.w(TAG, "new held input $holdId preempting unfinished holds=$previousHoldIds")
+            previousHoldIds.forEach { previousId ->
+                try {
+                    endHeldInputLocked(previousId, fromWatchdog = false, cancelled = true)
+                } catch (e: Exception) {
+                    Log.w(TAG, "could not release previous held input $previousId before $holdId", e)
+                    // endHeldInputLocked normally releases the lease in finally; keep this idempotent
+                    // safeguard so a failed transport cannot wedge all subsequent remote input.
+                    releaseHeldGate()
+                }
+            }
+        }
 
         // Reserve the input stream before sending DOWN. Every ordinary key and text request uses this same gate.
         val lease = inputGate.acquireHold()
@@ -462,58 +479,68 @@ class ConnectionManager(
         longPress: Boolean = false
     ) {
         heldLifecycleLock.withLock {
-            heldRenewals.remove(holdId)?.cancel()
-            val timeout = heldTimeouts.remove(holdId)
-            if (!fromWatchdog) timeout?.cancel()
-            val road = heldRoutes.remove(holdId) ?: return@withLock
-            try {
-                when (road) {
-                    HeldRoad.KEYBOARD -> keyboardLink.endHeldInput(holdId)
-                    HeldRoad.DASH, HeldRoad.UNCERTAIN_DASH -> {
-                        // Keep ordinary input blocked until the matching TV-side release request has been attempted.
-                        // CANCEL releases without converting a cancelled Back/OK gesture into a tap.
-                        heldKeyById.remove(holdId)?.let { key ->
-                            val action = if (cancelled) HeldAction.CANCEL else HeldAction.UP
-                            link.get(HeldInputProtocol.path(holdId, key, action))
-                        }
+            endHeldInputLocked(holdId, fromWatchdog, cancelled, longPress)
+        }
+    }
+
+    /** Ends one route while the caller already owns [heldLifecycleLock]. */
+    private suspend fun endHeldInputLocked(
+        holdId: String,
+        fromWatchdog: Boolean,
+        cancelled: Boolean = fromWatchdog,
+        longPress: Boolean = false
+    ) {
+        heldRenewals.remove(holdId)?.cancel()
+        val timeout = heldTimeouts.remove(holdId)
+        if (!fromWatchdog) timeout?.cancel()
+        val road = heldRoutes.remove(holdId) ?: return
+        try {
+            when (road) {
+                HeldRoad.KEYBOARD -> keyboardLink.endHeldInput(holdId)
+                HeldRoad.DASH, HeldRoad.UNCERTAIN_DASH -> {
+                    // Keep ordinary input blocked until the matching TV-side release request has been attempted.
+                    // CANCEL releases without converting a cancelled Back/OK gesture into a tap.
+                    heldKeyById.remove(holdId)?.let { key ->
+                        val action = if (cancelled) HeldAction.CANCEL else HeldAction.UP
+                        link.get(HeldInputProtocol.path(holdId, key, action))
                     }
-                    HeldRoad.TAP -> {
-                        heldKeyById.remove(holdId)?.let { key ->
-                            if (!cancelled) {
-                                val reply = link.get(com.example.tvlink.RemotePressProtocol.path(holdId, key, longPress))
-                                when (reply) {
-                                    TvReply.Unreachable -> {
-                                        setDash(false)
-                                        dashNudge.trySend(Unit)
-                                        _hint.value = "TV Dash could not be reached. Check the TV connection."
-                                    }
-                                    is TvReply.Rejected -> noteDashRejected(reply.http)
-                                    is TvReply.Ok -> {
-                                        setDash(true)
-                                        when (reply.body.trim()) {
-                                            "ok" -> _hint.value = ""
-                                            "no-a11y" -> _hint.value =
-                                                "TV Dash's accessibility service is unavailable. Enable it in TV settings."
-                                            "no-focus" -> _hint.value =
-                                                "The TV has no focused control to select. Move the D-pad highlight and try again."
-                                            "no-long-click" -> _hint.value =
-                                                "This app does not expose a long-press action for the selected control."
-                                            "action-failed" -> _hint.value =
-                                                "The TV could not perform that button action. Try again."
-                                            "bad-press" -> _hint.value =
-                                                "The TV rejected the remote button request. Reconnect the remote."
-                                            else -> _hint.value =
-                                                "TV Dash returned an unexpected button result: ${reply.body.trim().take(80)}"
-                                        }
+                }
+                HeldRoad.TAP -> {
+                    heldKeyById.remove(holdId)?.let { key ->
+                        if (!cancelled) {
+                            val reply = link.get(com.example.tvlink.RemotePressProtocol.path(holdId, key, longPress))
+                            when (reply) {
+                                TvReply.Unreachable -> {
+                                    setDash(false)
+                                    dashNudge.trySend(Unit)
+                                    _hint.value = "TV Dash could not be reached. Check the TV connection."
+                                }
+                                is TvReply.Rejected -> noteDashRejected(reply.http)
+                                is TvReply.Ok -> {
+                                    setDash(true)
+                                    when (reply.body.trim()) {
+                                        "ok" -> _hint.value = ""
+                                        "no-a11y" -> _hint.value =
+                                            "TV Dash's accessibility service is unavailable. Enable it in TV settings."
+                                        "no-focus" -> _hint.value =
+                                            "The TV has no focused control to select. Move the D-pad highlight and try again."
+                                        "no-long-click" -> _hint.value =
+                                            "This app does not expose a long-press action for the selected control."
+                                        "action-failed" -> _hint.value =
+                                            "The TV could not perform that button action. Try again."
+                                        "bad-press" -> _hint.value =
+                                            "The TV rejected the remote button request. Reconnect the remote."
+                                        else -> _hint.value =
+                                            "TV Dash returned an unexpected button result: ${reply.body.trim().take(80)}"
                                     }
                                 }
                             }
                         }
                     }
                 }
-            } finally {
-                releaseHeldGate()
             }
+        } finally {
+            releaseHeldGate()
         }
     }
 
