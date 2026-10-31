@@ -4,8 +4,6 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.example.tvlink.HeldRemoteKey
-import kotlinx.coroutines.Job
-import java.util.concurrent.ConcurrentHashMap
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -126,7 +124,11 @@ class RemoteViewModel(
     /** How well the remote reaches the TV right now. Read-only; Layer 1 is the only writer. */
     val connectionState: StateFlow<RemoteConnectionState> = connection.state
 
-    private val heldStartJobs = ConcurrentHashMap<String, Job>()
+    /**
+     * One FIFO for held-button lifecycle events and the next short OK command.
+     * The media-key release must finish before a following OK is sent to the TV.
+     */
+    private val heldInputQueue = CommandQueue(viewModelScope)
 
     /** A plain sentence about why something is not working, for a status line. Empty when there is nothing to say. Safe to ignore. */
     val hint: StateFlow<String> = connection.hint
@@ -348,18 +350,16 @@ class RemoteViewModel(
 
     // ---------------------------------------------------------------- held-button gestures
 
-    /** Begins one physical touch hold. The job is retained so a very quick release still waits for DOWN to finish. */
+    /** Begins one physical touch hold in the ordered input queue. */
     fun onHeldInputDown(key: HeldRemoteKey, holdId: String) {
-        val job = viewModelScope.launch {
+        heldInputQueue.submit {
             connection.beginHeldInput(holdId, key)
         }
-        heldStartJobs[holdId] = job
     }
 
-    /** Ends the same hold after DOWN completes, including pointer cancellation. */
+    /** Ends the same hold in queue order, before a later short OK is sent. */
     fun onHeldInputUp(holdId: String, cancelled: Boolean = false, longPress: Boolean = false) {
-        viewModelScope.launch {
-            heldStartJobs.remove(holdId)?.join()
+        heldInputQueue.submit {
             connection.endHeldInput(holdId, cancelled, longPress)
         }
     }
@@ -368,8 +368,16 @@ class RemoteViewModel(
 
     /** Sends one button to Layer 1 and gives a haptic tap if it was carried out. Silent otherwise. */
     private fun press(command: RemoteCommand) {
-        viewModelScope.launch {
-            if (send(command) == RemoteStatus.OK) haptic()
+        if (command == RemoteCommand.OK) {
+            // The center OK is a one-shot button, not a held-input gesture. Still queue it after FF/REW UP
+            // so it cannot race the media-key release coroutine.
+            heldInputQueue.submit {
+                if (send(command) == RemoteStatus.OK) haptic()
+            }
+        } else {
+            viewModelScope.launch {
+                if (send(command) == RemoteStatus.OK) haptic()
+            }
         }
     }
 
@@ -387,6 +395,7 @@ class RemoteViewModel(
 
     override fun onCleared() {
         keyboardQueue.close()
+        heldInputQueue.close()
         phoneWake.cancel()
         connection.stop()
     }
