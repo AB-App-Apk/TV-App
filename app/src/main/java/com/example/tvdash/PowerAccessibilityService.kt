@@ -129,7 +129,7 @@ class PowerAccessibilityService : AccessibilityService() {
      * Performs a genuine long-click only when the selected accessibility node advertises support.
      * It deliberately does not substitute a normal click or D-pad center when long-click is unavailable.
      */
-    fun performFocusedLongClickResult(): DiscretePressResult {
+    internal fun performFocusedLongClickResult(): DiscretePressResult {
         return try {
             val focused = findFocusedNode()
                 ?: return DiscretePressResult.NO_FOCUS
