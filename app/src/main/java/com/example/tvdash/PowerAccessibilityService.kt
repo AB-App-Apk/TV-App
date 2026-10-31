@@ -136,7 +136,11 @@ class PowerAccessibilityService : AccessibilityService() {
     internal fun performFocusedLongClickResult(): DiscretePressResult {
         return try {
             val focused = findFocusedNode()
-                ?: return DiscretePressResult.NO_FOCUS
+                ?: run {
+                    Log.w(TAG, "long-ok target lookup found no focused accessibility node")
+                    return DiscretePressResult.NO_FOCUS
+                }
+            logLongOkTarget(focused)
 
             val longClickId = AccessibilityNodeInfo.AccessibilityAction.ACTION_LONG_CLICK.id
             val supported = focused.isLongClickable ||
@@ -156,6 +160,19 @@ class PowerAccessibilityService : AccessibilityService() {
             Log.w(TAG, "focused long-click failed", t)
             DiscretePressResult.ACTION_FAILED
         }
+    }
+
+    /** Records the exact kind of focused node used by native long-click or touch-hold. */
+    private fun logLongOkTarget(node: AccessibilityNodeInfo) {
+        val bounds = Rect()
+        node.getBoundsInScreen(bounds)
+        Log.i(
+            TAG,
+            "long-ok target package=${node.packageName} class=${node.className} " +
+                "focused=${node.isFocused} accessibilityFocused=${node.isAccessibilityFocused} " +
+                "visible=${node.isVisibleToUser} clickable=${node.isClickable} " +
+                "longClickable=${node.isLongClickable} bounds=$bounds"
+        )
     }
 
     /**
