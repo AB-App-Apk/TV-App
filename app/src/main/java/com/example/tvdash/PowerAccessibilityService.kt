@@ -1,6 +1,9 @@
 package com.example.tvdash
 
 import android.accessibilityservice.AccessibilityService
+import android.accessibilityservice.GestureDescription
+import android.graphics.Path
+import android.graphics.Rect
 import android.content.Intent
 import android.os.Build
 import android.os.Bundle
@@ -23,6 +26,7 @@ class PowerAccessibilityService : AccessibilityService() {
         private const val TAG = "TvDashA11y"
         private const val WATCHDOG_MS = 15_000L
         private const val EVENT_GAP_MS = 5_000L
+        private const val LONG_PRESS_GESTURE_MS = 800L
         @Volatile var instance: PowerAccessibilityService? = null
     }
 
@@ -126,8 +130,8 @@ class PowerAccessibilityService : AccessibilityService() {
         performFocusedLongClickResult() == DiscretePressResult.SUCCESS
 
     /**
-     * Performs a genuine long-click only when the selected accessibility node advertises support.
-     * It deliberately does not substitute a normal click or D-pad center when long-click is unavailable.
+     * Prefer the node's native long-click action. If the app does not expose it (or rejects it),
+     * emulate a physical touch-and-hold at the focused control's screen center.
      */
     internal fun performFocusedLongClickResult(): DiscretePressResult {
         return try {
@@ -137,18 +141,69 @@ class PowerAccessibilityService : AccessibilityService() {
             val longClickId = AccessibilityNodeInfo.AccessibilityAction.ACTION_LONG_CLICK.id
             val supported = focused.isLongClickable ||
                 focused.actionList.any { it.id == longClickId }
-            if (!supported) {
-                Log.i(TAG, "focused node does not support long-click package=${focused.packageName} class=${focused.className}")
-                return DiscretePressResult.LONG_CLICK_UNSUPPORTED
+
+            if (supported) {
+                val performed = focused.performAction(AccessibilityNodeInfo.ACTION_LONG_CLICK)
+                Log.i(TAG, "focused long-click package=${focused.packageName} class=${focused.className} performed=$performed")
+                if (performed) return DiscretePressResult.SUCCESS
+                Log.i(TAG, "native long-click was rejected; trying touch-hold fallback")
+            } else {
+                Log.i(TAG, "focused node does not expose long-click; trying touch-hold fallback package=${focused.packageName} class=${focused.className}")
             }
 
-            val performed = focused.performAction(AccessibilityNodeInfo.ACTION_LONG_CLICK)
-            Log.i(TAG, "focused long-click package=${focused.packageName} class=${focused.className} performed=$performed")
-            if (performed) DiscretePressResult.SUCCESS else DiscretePressResult.ACTION_FAILED
+            dispatchFocusedTouchHold(focused)
         } catch (t: Throwable) {
             Log.w(TAG, "focused long-click failed", t)
             DiscretePressResult.ACTION_FAILED
         }
+    }
+
+    /**
+     * Dispatches a stationary 800 ms touch at the center of the focused node.
+     * A successful return means Android accepted the gesture; the callback records
+     * whether the gesture subsequently completed or was cancelled.
+     */
+    private fun dispatchFocusedTouchHold(focused: AccessibilityNodeInfo): DiscretePressResult {
+        if (!focused.isVisibleToUser) {
+            Log.w(TAG, "touch-hold target is not visible package=${focused.packageName} class=${focused.className}")
+            return DiscretePressResult.ACTION_FAILED
+        }
+
+        val bounds = Rect()
+        focused.getBoundsInScreen(bounds)
+        if (bounds.isEmpty) {
+            Log.w(TAG, "touch-hold target has empty screen bounds package=${focused.packageName} class=${focused.className}")
+            return DiscretePressResult.ACTION_FAILED
+        }
+
+        val packageName = focused.packageName?.toString() ?: "unknown"
+        val className = focused.className?.toString() ?: "unknown"
+        val path = Path().apply {
+            moveTo(bounds.centerX().toFloat(), bounds.centerY().toFloat())
+        }
+        val gesture = GestureDescription.Builder()
+            .addStroke(GestureDescription.StrokeDescription(path, 0L, LONG_PRESS_GESTURE_MS))
+            .build()
+
+        val accepted = dispatchGesture(
+            gesture,
+            object : GestureResultCallback() {
+                override fun onCompleted(gestureDescription: GestureDescription?) {
+                    Log.i(TAG, "touch-hold completed package=$packageName class=$className bounds=$bounds durationMs=$LONG_PRESS_GESTURE_MS")
+                }
+
+                override fun onCancelled(gestureDescription: GestureDescription?) {
+                    Log.w(TAG, "touch-hold cancelled package=$packageName class=$className bounds=$bounds")
+                }
+            },
+            handler
+        )
+
+        Log.i(
+            TAG,
+            "touch-hold dispatch accepted=$accepted package=$packageName class=$className bounds=$bounds durationMs=$LONG_PRESS_GESTURE_MS"
+        )
+        return if (accepted) DiscretePressResult.SUCCESS else DiscretePressResult.ACTION_FAILED
     }
 
     /**
