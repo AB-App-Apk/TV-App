@@ -104,34 +104,100 @@ class PowerAccessibilityService : AccessibilityService() {
         safely("sleep") { performGlobalAction(GLOBAL_ACTION_LOCK_SCREEN) }
     }
 
-    /**
-     * Attempts a real accessibility long-click on the currently focused TV UI node.
-     * Returns false when the app/firmware does not expose a focused node with long-click support.
-     */
-    /** Performs a normal click on the currently focused TV UI node. */
+    /** Performs a normal click on the currently selected TV control. */
     fun performFocusedClick(): Boolean {
         return try {
-            val root = rootInActiveWindow ?: return false
-            val focused = root.findFocus(AccessibilityNodeInfo.FOCUS_ACCESSIBILITY)
-                ?: root.findFocus(AccessibilityNodeInfo.FOCUS_INPUT)
-                ?: findViewFocusedNode(root, 0)
-            focused?.performAction(AccessibilityNodeInfo.ACTION_CLICK) == true
+            val focused = findFocusedNode() ?: return false
+            val performed = focused.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+            Log.i(TAG, "focused click package=${focused.packageName} class=${focused.className} performed=$performed")
+            performed
         } catch (t: Throwable) {
             Log.w(TAG, "focused click failed", t)
             false
         }
     }
 
-    fun performFocusedLongClick(): Boolean {
+    /**
+     * Legacy Boolean API retained for the older held-key watchdog.
+     * The discrete Wi-Fi route uses [performFocusedLongClickResult] so it can report the
+     * difference between missing focus, unsupported long-click, and execution failure.
+     */
+    fun performFocusedLongClick(): Boolean =
+        performFocusedLongClickResult() == DiscretePressResult.SUCCESS
+
+    /**
+     * Performs a genuine long-click only when the selected accessibility node advertises support.
+     * It deliberately does not substitute a normal click or D-pad center when long-click is unavailable.
+     */
+    internal fun performFocusedLongClickResult(): DiscretePressResult {
         return try {
-            val root = rootInActiveWindow ?: return false
-            val focused = root.findFocus(AccessibilityNodeInfo.FOCUS_ACCESSIBILITY)
-                ?: findViewFocusedNode(root, 0)
-            focused?.performAction(AccessibilityNodeInfo.ACTION_LONG_CLICK) == true
+            val focused = findFocusedNode()
+                ?: return DiscretePressResult.NO_FOCUS
+
+            val longClickId = AccessibilityNodeInfo.AccessibilityAction.ACTION_LONG_CLICK.id
+            val supported = focused.isLongClickable ||
+                focused.actionList.any { it.id == longClickId }
+            if (!supported) {
+                Log.i(TAG, "focused node does not support long-click package=${focused.packageName} class=${focused.className}")
+                return DiscretePressResult.LONG_CLICK_UNSUPPORTED
+            }
+
+            val performed = focused.performAction(AccessibilityNodeInfo.ACTION_LONG_CLICK)
+            Log.i(TAG, "focused long-click package=${focused.packageName} class=${focused.className} performed=$performed")
+            if (performed) DiscretePressResult.SUCCESS else DiscretePressResult.ACTION_FAILED
         } catch (t: Throwable) {
             Log.w(TAG, "focused long-click failed", t)
-            false
+            DiscretePressResult.ACTION_FAILED
         }
+    }
+
+    /**
+     * Resolves the currently selected control consistently across interactive windows.
+     * D-pad input focus is preferred to accessibility focus because the latter can point at a
+     * different item from the one highlighted by the TV's remote-navigation system.
+     */
+    private fun findFocusedNode(): AccessibilityNodeInfo? {
+        val roots = ArrayList<AccessibilityNodeInfo>()
+
+        try {
+            rootInActiveWindow?.let { roots.add(it) }
+        } catch (t: Throwable) {
+            Log.w(TAG, "active accessibility root unavailable", t)
+        }
+        try {
+            windows.forEach { window ->
+                window.root?.let { roots.add(it) }
+            }
+        } catch (t: Throwable) {
+            Log.w(TAG, "interactive accessibility windows unavailable", t)
+        }
+
+        // Search every available window for input focus before considering accessibility focus.
+        for (root in roots) {
+            val focused = try {
+                root.findFocus(AccessibilityNodeInfo.FOCUS_INPUT)
+            } catch (t: Throwable) {
+                Log.w(TAG, "input-focus lookup failed", t)
+                null
+            }
+            if (focused != null) return focused
+        }
+
+        for (root in roots) {
+            val focused = try {
+                root.findFocus(AccessibilityNodeInfo.FOCUS_ACCESSIBILITY)
+            } catch (t: Throwable) {
+                Log.w(TAG, "accessibility-focus lookup failed", t)
+                null
+            }
+            if (focused != null) return focused
+        }
+
+        for (root in roots) {
+            val focused = findViewFocusedNode(root, 0)
+            if (focused != null) return focused
+        }
+        return null
     }
 
     private fun findViewFocusedNode(node: AccessibilityNodeInfo, depth: Int): AccessibilityNodeInfo? {

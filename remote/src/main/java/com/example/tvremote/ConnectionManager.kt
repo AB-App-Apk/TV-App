@@ -141,6 +141,9 @@ class ConnectionManager(
         /** A typing session with no activity for this long is over; its text is never edited again. */
         const val SESSION_IDLE_MS = 10_000L
 
+        /** Safety bound for a phone-classified Back/OK touch that never delivers its release callback. */
+        const val DISCRETE_PRESS_MAX_MS = 15_000L
+
         /** After TV Dash cannot take typing (no keyboard set, no text box), do not ask it again for this long. */
         const val DASH_TYPING_PAUSE_MS = 10_000L
 
@@ -478,9 +481,31 @@ class ConnectionManager(
                         heldKeyById.remove(holdId)?.let { key ->
                             if (!cancelled) {
                                 val reply = link.get(com.example.tvlink.RemotePressProtocol.path(holdId, key, longPress))
-                                if (reply is TvReply.Unreachable) {
-                                    setDash(false)
-                                    dashNudge.trySend(Unit)
+                                when (reply) {
+                                    TvReply.Unreachable -> {
+                                        setDash(false)
+                                        dashNudge.trySend(Unit)
+                                        _hint.value = "TV Dash could not be reached. Check the TV connection."
+                                    }
+                                    is TvReply.Rejected -> noteDashRejected(reply.http)
+                                    is TvReply.Ok -> {
+                                        setDash(true)
+                                        when (reply.body.trim()) {
+                                            "ok" -> _hint.value = ""
+                                            "no-a11y" -> _hint.value =
+                                                "TV Dash's accessibility service is unavailable. Enable it in TV settings."
+                                            "no-focus" -> _hint.value =
+                                                "The TV has no focused control to select. Move the D-pad highlight and try again."
+                                            "no-long-click" -> _hint.value =
+                                                "This app does not expose a long-press action for the selected control."
+                                            "action-failed" -> _hint.value =
+                                                "The TV could not perform that button action. Try again."
+                                            "bad-press" -> _hint.value =
+                                                "The TV rejected the remote button request. Reconnect the remote."
+                                            else -> _hint.value =
+                                                "TV Dash returned an unexpected button result: ${reply.body.trim().take(80)}"
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -494,7 +519,11 @@ class ConnectionManager(
 
     private fun trackHeld(holdId: String, road: HeldRoad) {
         heldRoutes[holdId] = road
-        if (road != HeldRoad.TAP || !heldKeyById.containsKey(holdId)) scheduleHeldTimeout(holdId)
+        if (road == HeldRoad.TAP && heldKeyById.containsKey(holdId)) {
+            scheduleHeldTimeout(holdId, DISCRETE_PRESS_MAX_MS)
+        } else {
+            scheduleHeldTimeout(holdId)
+        }
 
         // The lease is renewed only while the captured touch remains active. If renewal stops, the independent
         // timeout still releases the phone-side hold; the TV has its own matching four-second network watchdog.
@@ -540,10 +569,13 @@ class ConnectionManager(
     }
 
     /** Reschedules the independent phone-side safety deadline after a successful lease renewal. */
-    private fun scheduleHeldTimeout(holdId: String) {
+    private fun scheduleHeldTimeout(
+        holdId: String,
+        timeoutMs: Long = HeldInputProtocol.WATCHDOG_TIMEOUT_MS
+    ) {
         lateinit var timeout: Job
         timeout = scope.launch {
-            delay(HeldInputProtocol.WATCHDOG_TIMEOUT_MS)
+            delay(timeoutMs)
             if (heldTimeouts[holdId] === timeout) {
                 endHeldInput(holdId, fromWatchdog = true)
             }
