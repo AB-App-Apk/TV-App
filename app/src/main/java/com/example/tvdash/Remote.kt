@@ -337,31 +337,38 @@ class RemoteService : Service() {
     )
 
     /**
-     * Dispatches a held FF/REW media event without changing the existing return/hold policy.
-     * The Boolean is diagnostic only: the previous implementation also kept the hold active
-     * regardless of dispatchMediaKeyEvent()'s return value.
+     * Dispatches a held FF/REW media event without changing the existing hold policy.
+     * AudioManager.dispatchMediaKeyEvent() returns Unit, so diagnostics record whether the
+     * call began, returned normally, or threw; they do not claim Android accepted the event.
      */
     private fun dispatchHeldMediaKey(
         key: com.example.tvlink.HeldRemoteKey,
         phase: String,
         event: KeyEvent
-    ): Boolean {
-        return try {
-            val dispatchReturned = getSystemService(AudioManager::class.java).dispatchMediaKeyEvent(event)
-            val elapsedRealtimeMs = android.os.SystemClock.elapsedRealtime()
-            val heldMs = (event.eventTime - event.downTime).coerceAtLeast(0L)
+    ) {
+        val elapsedRealtimeMs = android.os.SystemClock.elapsedRealtime()
+        val heldMs = (event.eventTime - event.downTime).coerceAtLeast(0L)
+        val eventSummary =
+            "key=${key.wireName} keyCode=${event.keyCode} action=${event.action} " +
+                "repeatCount=${event.repeatCount} downTimeUptimeMs=${event.downTime} " +
+                "eventTimeUptimeMs=${event.eventTime} heldMs=$heldMs"
+
+        Log.i(
+            INPUT_TRACE_TAG,
+            "media-key phase=$phase dispatch-call=begin $eventSummary elapsedRealtimeMs=$elapsedRealtimeMs"
+        )
+        try {
+            getSystemService(AudioManager::class.java).dispatchMediaKeyEvent(event)
             Log.i(
                 INPUT_TRACE_TAG,
-                "media-key phase=$phase key=${key.wireName} keyCode=${event.keyCode} action=${event.action} " +
-                    "repeatCount=${event.repeatCount} downTimeUptimeMs=${event.downTime} " +
-                    "eventTimeUptimeMs=${event.eventTime} heldMs=$heldMs dispatchReturned=$dispatchReturned " +
-                    "elapsedRealtimeMs=$elapsedRealtimeMs"
+                "media-key phase=$phase dispatch-call=returned $eventSummary " +
+                    "elapsedRealtimeMs=${android.os.SystemClock.elapsedRealtime()}"
             )
-            dispatchReturned
         } catch (t: Throwable) {
             Log.e(
                 INPUT_TRACE_TAG,
-                "media-key phase=$phase key=${key.wireName} keyCode=${event.keyCode} dispatch threw",
+                "media-key phase=$phase dispatch-call=threw $eventSummary " +
+                    "elapsedRealtimeMs=${android.os.SystemClock.elapsedRealtime()}",
                 t
             )
             throw t
