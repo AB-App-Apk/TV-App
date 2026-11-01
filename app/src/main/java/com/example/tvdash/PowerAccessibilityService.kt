@@ -108,15 +108,35 @@ class PowerAccessibilityService : AccessibilityService() {
         safely("sleep") { performGlobalAction(GLOBAL_ACTION_LOCK_SCREEN) }
     }
 
-    /** Performs a normal click on the currently selected TV control. */
+    /** Performs an accessibility click only when the Short-OK D-pad-center action was rejected. */
     fun performFocusedClick(): Boolean {
         return try {
-            val focused = findFocusedNode() ?: return false
+            val focused = findFocusedNode()
+            if (focused == null) {
+                Log.w(TAG, "short-ok dispatch=ACTION_CLICK target=none")
+                return false
+            }
+            val bounds = Rect()
+            focused.getBoundsInScreen(bounds)
+            Log.i(
+                TAG,
+                "short-ok ACTION_CLICK target package=" + focused.packageName +
+                    " class=" + focused.className +
+                    " inputFocused=" + focused.isFocused +
+                    " accessibilityFocused=" + focused.isAccessibilityFocused +
+                    " visible=" + focused.isVisibleToUser +
+                    " clickable=" + focused.isClickable +
+                    " bounds=" + bounds
+            )
             val performed = focused.performAction(AccessibilityNodeInfo.ACTION_CLICK)
-            Log.i(TAG, "focused click package=${focused.packageName} class=${focused.className} performed=$performed")
+            Log.i(
+                TAG,
+                "short-ok dispatch=ACTION_CLICK performed=" + performed +
+                    " package=" + focused.packageName + " class=" + focused.className
+            )
             performed
         } catch (t: Throwable) {
-            Log.w(TAG, "focused click failed", t)
+            Log.w(TAG, "short-ok dispatch=ACTION_CLICK failed", t)
             false
         }
     }
