@@ -74,7 +74,7 @@ internal class HeldKeyWatchdog(
         if (closed) return "closed"
         if (!HeldInputProtocol.isValidHoldId(holdId)) return "bad-hold"
         if (key == HeldRemoteKey.FORWARD || key == HeldRemoteKey.REWIND) {
-            trace("hold-watchdog action=${action.wireName} key=${key.wireName} holdId=$holdId elapsedRealtimeMs=${SystemClock.elapsedRealtime()}")
+            trace("hold-watchdog action=${action.wireName} key=${key.wireName} holdId=$holdId uptimeMs=${uptimeMillis()}")
         }
         return when (action) {
             HeldAction.DOWN -> start(holdId, key)
@@ -168,7 +168,7 @@ internal class HeldKeyWatchdog(
             }
             if (shouldRelease) {
                 if (hold.key == HeldRemoteKey.FORWARD || hold.key == HeldRemoteKey.REWIND) {
-                    trace("hold-release reason=watchdog-timeout key=${hold.key.wireName} holdId=$holdId repeatCount=${hold.repeatCount} elapsedRealtimeMs=${SystemClock.elapsedRealtime()}")
+                    trace("hold-release reason=watchdog-timeout key=${hold.key.wireName} holdId=$holdId repeatCount=${hold.repeatCount} uptimeMs=${uptimeMillis()}")
                 }
                 try {
                     onUp(hold.key, hold.downTime)
@@ -224,7 +224,7 @@ internal class HeldKeyWatchdog(
                         try {
                             onRepeat(hold.key, hold.downTime, nextCount)
                             if (hold.key == HeldRemoteKey.FORWARD || hold.key == HeldRemoteKey.REWIND) {
-                                trace("hold-repeat key=${hold.key.wireName} holdId=$holdId repeatCount=$nextCount elapsedRealtimeMs=${SystemClock.elapsedRealtime()}")
+                                trace("hold-repeat key=${hold.key.wireName} holdId=$holdId repeatCount=$nextCount uptimeMs=${uptimeMillis()}")
                             }
                             hold.repeatCount = nextCount
                             true
@@ -253,7 +253,7 @@ internal class HeldKeyWatchdog(
             if (!hold.downDelivered) return
             hold.downDelivered = false
             if (hold.key == HeldRemoteKey.FORWARD || hold.key == HeldRemoteKey.REWIND) {
-                trace("hold-release reason=${if (cancelled) "cancel" else "client-up"} key=${hold.key.wireName} holdId=$holdId repeatCount=${hold.repeatCount} elapsedRealtimeMs=${SystemClock.elapsedRealtime()}")
+                trace("hold-release reason=${if (cancelled) "cancel" else "client-up"} key=${hold.key.wireName} holdId=$holdId repeatCount=${hold.repeatCount} uptimeMs=${uptimeMillis()}")
             }
             try {
                 if (isLongPressKey(hold.key)) {
