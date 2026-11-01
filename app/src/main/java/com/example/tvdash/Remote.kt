@@ -333,7 +333,8 @@ class RemoteService : Service() {
                 }
                 else -> Unit
             }
-        }
+        },
+        onTrace = { message -> Log.i(INPUT_TRACE_TAG, message) }
     )
 
     /**
