@@ -1,6 +1,7 @@
 package com.example.tvdash
 
 import android.os.SystemClock
+import android.util.Log
 import com.example.tvlink.HeldAction
 import com.example.tvlink.HeldInputProtocol
 import com.example.tvlink.HeldRemoteKey
@@ -36,6 +37,7 @@ internal class HeldKeyWatchdog(
     private val beforeReleaseLock: (String) -> Unit = {}
 ) : AutoCloseable {
     private companion object {
+        const val TAG = "TvDashInput"
         const val MAX_ACTIVE_HOLDS = 8
         const val DEFAULT_REPEAT_INITIAL_DELAY_MS = 500L
         const val DEFAULT_REPEAT_INTERVAL_MS = 250L
@@ -62,6 +64,9 @@ internal class HeldKeyWatchdog(
     fun handle(holdId: String, key: HeldRemoteKey, action: HeldAction): String {
         if (closed) return "closed"
         if (!HeldInputProtocol.isValidHoldId(holdId)) return "bad-hold"
+        if (key == HeldRemoteKey.FORWARD || key == HeldRemoteKey.REWIND) {
+            Log.i(TAG, "hold-watchdog action=${action.wireName} key=${key.wireName} holdId=$holdId elapsedRealtimeMs=${SystemClock.elapsedRealtime()}")
+        }
         return when (action) {
             HeldAction.DOWN -> start(holdId, key)
             HeldAction.RENEW -> renew(holdId, key)
@@ -79,6 +84,9 @@ internal class HeldKeyWatchdog(
 
     private fun start(holdId: String, key: HeldRemoteKey): String {
         val hold = ActiveHold(key, uptimeMillis())
+        if (isRepeatable(key) && (key == HeldRemoteKey.FORWARD || key == HeldRemoteKey.REWIND)) {
+            Log.i(TAG, "hold-start key=${key.wireName} holdId=$holdId downTimeUptimeMs=${hold.downTime}")
+        }
 
         // Acquire the per-hold lock BEFORE publishing the hold. Otherwise UP/close can remove a
         // just-published hold, observe downDelivered=false, and return before DOWN is dispatched.
@@ -150,6 +158,9 @@ internal class HeldKeyWatchdog(
                 }
             }
             if (shouldRelease) {
+                if (hold.key == HeldRemoteKey.FORWARD || hold.key == HeldRemoteKey.REWIND) {
+                    Log.w(TAG, "hold-release reason=watchdog-timeout key=${hold.key.wireName} holdId=$holdId repeatCount=${hold.repeatCount} elapsedRealtimeMs=${SystemClock.elapsedRealtime()}")
+                }
                 try {
                     onUp(hold.key, hold.downTime)
                 } catch (_: Exception) {
@@ -203,6 +214,9 @@ internal class HeldKeyWatchdog(
                         val nextCount = hold.repeatCount + 1
                         try {
                             onRepeat(hold.key, hold.downTime, nextCount)
+                            if (hold.key == HeldRemoteKey.FORWARD || hold.key == HeldRemoteKey.REWIND) {
+                                Log.i(TAG, "hold-repeat key=${hold.key.wireName} holdId=$holdId repeatCount=$nextCount elapsedRealtimeMs=${SystemClock.elapsedRealtime()}")
+                            }
                             hold.repeatCount = nextCount
                             true
                         } catch (_: Exception) {
@@ -229,6 +243,9 @@ internal class HeldKeyWatchdog(
             hold.longPressJob = null
             if (!hold.downDelivered) return
             hold.downDelivered = false
+            if (hold.key == HeldRemoteKey.FORWARD || hold.key == HeldRemoteKey.REWIND) {
+                Log.i(TAG, "hold-release reason=${if (cancelled) "cancel" else "client-up"} key=${hold.key.wireName} holdId=$holdId repeatCount=${hold.repeatCount} elapsedRealtimeMs=${SystemClock.elapsedRealtime()}")
+            }
             try {
                 if (isLongPressKey(hold.key)) {
                     if (!cancelled && !hold.longPressDelivered) onTap(hold.key)
