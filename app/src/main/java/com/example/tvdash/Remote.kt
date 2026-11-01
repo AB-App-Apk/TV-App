@@ -514,10 +514,12 @@ class RemoteService : Service() {
                         service.performFocusedLongClickResult()
                     }.wireValue
                     else -> DiscretePressDispatch.shortOk(
-                        focusedClick = { service.performFocusedClick() },
-                        fallbackDpadCenter = {
-                            service.performGlobalAction(AccessibilityService.GLOBAL_ACTION_DPAD_CENTER)
-                        }
+                        dpadCenter = {
+                            val performed = service.performGlobalAction(AccessibilityService.GLOBAL_ACTION_DPAD_CENTER)
+                            Log.i(TAG, "short-ok dispatch=GLOBAL_ACTION_DPAD_CENTER performed=" + performed)
+                            performed
+                        },
+                        focusedClick = { service.performFocusedClick() }
                     ).wireValue
                 }
             }
