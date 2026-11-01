@@ -33,7 +33,9 @@ internal class HeldKeyWatchdog(
     /** Test seam for coordinating the registration-to-dispatch race; production default is a no-op. */
     private val afterHoldPublished: (String) -> Unit = {},
     /** Test seam called after a hold leaves the active map but before release acquires its lock. */
-    private val beforeReleaseLock: (String) -> Unit = {}
+    private val beforeReleaseLock: (String) -> Unit = {},
+    /** Production supplies Android Logcat; JVM tests keep the default no-op trace sink. */
+    private val onTrace: (String) -> Unit = {}
 ) : AutoCloseable {
     private companion object {
         const val MAX_ACTIVE_HOLDS = 8
@@ -59,9 +61,21 @@ internal class HeldKeyWatchdog(
 
     @Volatile private var closed = false
 
+    /** Trace callbacks must never alter the held-input lifecycle, even if a logger fails. */
+    private fun trace(message: String) {
+        try {
+            onTrace(message)
+        } catch (_: Exception) {
+            // Diagnostics are best-effort and must not affect input dispatch or release.
+        }
+    }
+
     fun handle(holdId: String, key: HeldRemoteKey, action: HeldAction): String {
         if (closed) return "closed"
         if (!HeldInputProtocol.isValidHoldId(holdId)) return "bad-hold"
+        if (key == HeldRemoteKey.FORWARD || key == HeldRemoteKey.REWIND) {
+            trace("hold-watchdog action=${action.wireName} key=${key.wireName} holdId=$holdId uptimeMs=${uptimeMillis()}")
+        }
         return when (action) {
             HeldAction.DOWN -> start(holdId, key)
             HeldAction.RENEW -> renew(holdId, key)
@@ -79,6 +93,9 @@ internal class HeldKeyWatchdog(
 
     private fun start(holdId: String, key: HeldRemoteKey): String {
         val hold = ActiveHold(key, uptimeMillis())
+        if (isRepeatable(key) && (key == HeldRemoteKey.FORWARD || key == HeldRemoteKey.REWIND)) {
+            trace("hold-start key=${key.wireName} holdId=$holdId downTimeUptimeMs=${hold.downTime}")
+        }
 
         // Acquire the per-hold lock BEFORE publishing the hold. Otherwise UP/close can remove a
         // just-published hold, observe downDelivered=false, and return before DOWN is dispatched.
@@ -150,6 +167,9 @@ internal class HeldKeyWatchdog(
                 }
             }
             if (shouldRelease) {
+                if (hold.key == HeldRemoteKey.FORWARD || hold.key == HeldRemoteKey.REWIND) {
+                    trace("hold-release reason=watchdog-timeout key=${hold.key.wireName} holdId=$holdId repeatCount=${hold.repeatCount} uptimeMs=${uptimeMillis()}")
+                }
                 try {
                     onUp(hold.key, hold.downTime)
                 } catch (_: Exception) {
@@ -203,6 +223,9 @@ internal class HeldKeyWatchdog(
                         val nextCount = hold.repeatCount + 1
                         try {
                             onRepeat(hold.key, hold.downTime, nextCount)
+                            if (hold.key == HeldRemoteKey.FORWARD || hold.key == HeldRemoteKey.REWIND) {
+                                trace("hold-repeat key=${hold.key.wireName} holdId=$holdId repeatCount=$nextCount uptimeMs=${uptimeMillis()}")
+                            }
                             hold.repeatCount = nextCount
                             true
                         } catch (_: Exception) {
@@ -229,6 +252,9 @@ internal class HeldKeyWatchdog(
             hold.longPressJob = null
             if (!hold.downDelivered) return
             hold.downDelivered = false
+            if (hold.key == HeldRemoteKey.FORWARD || hold.key == HeldRemoteKey.REWIND) {
+                trace("hold-release reason=${if (cancelled) "cancel" else "client-up"} key=${hold.key.wireName} holdId=$holdId repeatCount=${hold.repeatCount} uptimeMs=${uptimeMillis()}")
+            }
             try {
                 if (isLongPressKey(hold.key)) {
                     if (!cancelled && !hold.longPressDelivered) onTap(hold.key)
