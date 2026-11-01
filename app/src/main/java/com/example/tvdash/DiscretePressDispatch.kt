@@ -1,8 +1,9 @@
 package com.example.tvdash
 
 /**
- * The deliberately asymmetric fallback policy for Wi-Fi OK:
- * a short press may fall back to D-pad center; a long press must never become a short select.
+ * Wi-Fi Short OK first uses Android's D-pad-center action, matching a physical or keyboard OK press.
+ * A focused accessibility click is only a fallback when Android cannot dispatch D-pad center.
+ * A long press must never become a short select.
  */
 internal enum class DiscretePressResult(val wireValue: String) {
     SUCCESS("ok"),
@@ -13,11 +14,11 @@ internal enum class DiscretePressResult(val wireValue: String) {
 
 internal object DiscretePressDispatch {
     fun shortOk(
-        focusedClick: () -> Boolean,
-        fallbackDpadCenter: () -> Boolean
+        dpadCenter: () -> Boolean,
+        focusedClick: () -> Boolean
     ): DiscretePressResult {
-        if (focusedClick()) return DiscretePressResult.SUCCESS
-        return if (fallbackDpadCenter()) {
+        if (dpadCenter()) return DiscretePressResult.SUCCESS
+        return if (focusedClick()) {
             DiscretePressResult.SUCCESS
         } else {
             DiscretePressResult.ACTION_FAILED

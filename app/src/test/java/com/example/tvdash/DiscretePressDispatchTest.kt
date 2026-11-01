@@ -5,42 +5,52 @@ import org.junit.Test
 
 class DiscretePressDispatchTest {
     @Test
-    fun shortOkPrefersFocusedNodeClick() {
-        var fallbackCalls = 0
+    fun shortOkPrefersDpadCenterAndDoesNotClickAccessibilityNode() {
+        var dpadCalls = 0
+        var focusedClickCalls = 0
 
         val result = DiscretePressDispatch.shortOk(
-            focusedClick = { true },
-            fallbackDpadCenter = {
-                fallbackCalls++
+            dpadCenter = {
+                dpadCalls++
+                true
+            },
+            focusedClick = {
+                focusedClickCalls++
                 true
             }
         )
 
         assertEquals(DiscretePressResult.SUCCESS, result)
-        assertEquals(0, fallbackCalls)
+        assertEquals(1, dpadCalls)
+        assertEquals(0, focusedClickCalls)
     }
 
     @Test
-    fun shortOkUsesDpadCenterWhenFocusedNodeClickFails() {
-        var fallbackCalls = 0
+    fun shortOkUsesFocusedNodeClickOnlyWhenDpadCenterFails() {
+        var dpadCalls = 0
+        var focusedClickCalls = 0
 
         val result = DiscretePressDispatch.shortOk(
-            focusedClick = { false },
-            fallbackDpadCenter = {
-                fallbackCalls++
+            dpadCenter = {
+                dpadCalls++
+                false
+            },
+            focusedClick = {
+                focusedClickCalls++
                 true
             }
         )
 
         assertEquals(DiscretePressResult.SUCCESS, result)
-        assertEquals(1, fallbackCalls)
+        assertEquals(1, dpadCalls)
+        assertEquals(1, focusedClickCalls)
     }
 
     @Test
     fun shortOkReportsFailureWhenBothDispatchMethodsFail() {
         val result = DiscretePressDispatch.shortOk(
-            focusedClick = { false },
-            fallbackDpadCenter = { false }
+            dpadCenter = { false },
+            focusedClick = { false }
         )
 
         assertEquals(DiscretePressResult.ACTION_FAILED, result)
