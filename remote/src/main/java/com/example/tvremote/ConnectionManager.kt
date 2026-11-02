@@ -409,6 +409,16 @@ class ConnectionManager(
                     }
                     return false
                 }
+                if (reply is TvReply.Ok &&
+                    (reply.body.trim() == "no-a11y" || reply.body.trim() == "action-failed")
+                ) {
+                    _hint.value = if (reply.body.trim() == "no-a11y") {
+                        "Enable TV Dash accessibility to use Wi-Fi seek controls."
+                    } else {
+                        "TV Dash could not send the seek action. Check accessibility service status."
+                    }
+                    return false
+                }
                 if (reply is TvReply.Rejected) {
                     noteDashRejected(reply.http)
                     return false
