@@ -27,8 +27,6 @@ import android.os.IBinder
 import android.os.Looper
 import android.os.PowerManager
 import android.util.Log
-import android.view.InputDevice
-import android.view.KeyCharacterMap
 import android.view.KeyEvent
 import android.view.inputmethod.InputMethodManager
 import androidx.core.content.ContextCompat
@@ -252,71 +250,53 @@ class RemoteService : Service() {
     /** Recently completed discrete presses; a retry after a lost HTTP response must not execute twice. */
     private val completedPresses = ConcurrentHashMap<String, String>()
 
-    /** Timestamp of the most recent attempted FF/REW release, used to correlate the next Short OK. */
-    @Volatile private var lastMediaSeekUpAttemptElapsedMs = 0L
+    /** Timestamp of the most recent completed Wi-Fi FF/REW hold, used to correlate the next Short OK. */
+    @Volatile private var lastHeldSeekReleaseElapsedMs = 0L
 
     /** Network-held media and vertical-navigation inputs; unmatched holds expire after the safety timeout. */
     private val heldKeyWatchdog = HeldKeyWatchdog(
-        onDown = { key, downTime ->
-            val keyCode = when (key) {
-                com.example.tvlink.HeldRemoteKey.FORWARD -> KeyEvent.KEYCODE_MEDIA_FAST_FORWARD
-                com.example.tvlink.HeldRemoteKey.REWIND -> KeyEvent.KEYCODE_MEDIA_REWIND
+        onDown = { key, _ ->
+            when (key) {
+                com.example.tvlink.HeldRemoteKey.FORWARD,
+                com.example.tvlink.HeldRemoteKey.REWIND,
                 com.example.tvlink.HeldRemoteKey.UP,
-                com.example.tvlink.HeldRemoteKey.DOWN,
-                com.example.tvlink.HeldRemoteKey.BACK,
-                com.example.tvlink.HeldRemoteKey.OK -> null
-            }
-            if (key == com.example.tvlink.HeldRemoteKey.UP || key == com.example.tvlink.HeldRemoteKey.DOWN) {
-                if (performHeldDpadAction(key)) "ok" else "no-a11y"
-            } else if (key == com.example.tvlink.HeldRemoteKey.BACK || key == com.example.tvlink.HeldRemoteKey.OK) {
-                // These are delayed until release/long-press classification; never synthesize a held KeyEvent.
-                "ok"
-            } else if (keyCode == null) {
-                "unsupported"
-            } else {
-                val event = createHeldMediaKeyEvent(downTime, downTime, KeyEvent.ACTION_DOWN, keyCode, 0)
-                dispatchHeldMediaKey(key, "DOWN", event) // Keep accepting the hold as before; record the platform result.
-                "ok"
-            }
-        },
-        onRepeat = { key, downTime, repeatCount ->
-            if (key == com.example.tvlink.HeldRemoteKey.UP || key == com.example.tvlink.HeldRemoteKey.DOWN) {
-                performHeldDpadAction(key)
-            } else {
-                val keyCode = when (key) {
-                    com.example.tvlink.HeldRemoteKey.FORWARD -> KeyEvent.KEYCODE_MEDIA_FAST_FORWARD
-                    com.example.tvlink.HeldRemoteKey.REWIND -> KeyEvent.KEYCODE_MEDIA_REWIND
-                    com.example.tvlink.HeldRemoteKey.UP,
-                    com.example.tvlink.HeldRemoteKey.DOWN,
-                    com.example.tvlink.HeldRemoteKey.BACK,
-                    com.example.tvlink.HeldRemoteKey.OK -> null
+                com.example.tvlink.HeldRemoteKey.DOWN -> {
+                    if (performHeldDpadAction(key)) {
+                        "ok"
+                    } else if (PowerAccessibilityService.instance == null) {
+                        "no-a11y"
+                    } else {
+                        "action-failed"
+                    }
                 }
-                if (keyCode != null) {
-                    // Android models held-key repetition as additional ACTION_DOWN events with a nonzero repeat count.
-                    val event = createHeldMediaKeyEvent(
-                        downTime,
-                        android.os.SystemClock.uptimeMillis(),
-                        KeyEvent.ACTION_DOWN,
-                        keyCode,
-                        repeatCount
-                    )
-                    dispatchHeldMediaKey(key, "REPEAT", event)
+                com.example.tvlink.HeldRemoteKey.BACK,
+                com.example.tvlink.HeldRemoteKey.OK -> {
+                    // These are classified at release; never synthesize a held KeyEvent.
+                    "ok"
                 }
             }
         },
-        onUp = { key, downTime ->
-            val keyCode = when (key) {
-                com.example.tvlink.HeldRemoteKey.FORWARD -> KeyEvent.KEYCODE_MEDIA_FAST_FORWARD
-                com.example.tvlink.HeldRemoteKey.REWIND -> KeyEvent.KEYCODE_MEDIA_REWIND
-                com.example.tvlink.HeldRemoteKey.UP,
-                com.example.tvlink.HeldRemoteKey.DOWN,
-                com.example.tvlink.HeldRemoteKey.BACK,
-                com.example.tvlink.HeldRemoteKey.OK -> null
+        onRepeat = { key, _, _ ->
+            if (!performHeldDpadAction(key) &&
+                (key == com.example.tvlink.HeldRemoteKey.FORWARD ||
+                    key == com.example.tvlink.HeldRemoteKey.REWIND)
+            ) {
+                // Stop further seek steps if the accessibility service can no longer deliver them.
+                throw IllegalStateException("Accessibility seek action failed for ${key.wireName}")
             }
-            if (keyCode != null) {
-                val event = createHeldMediaKeyEvent(downTime, android.os.SystemClock.uptimeMillis(), KeyEvent.ACTION_UP, keyCode, 0)
-                dispatchHeldMediaKey(key, "UP", event)
-                lastMediaSeekUpAttemptElapsedMs = android.os.SystemClock.elapsedRealtime()
+        },
+        onUp = { key, _ ->
+            if (key == com.example.tvlink.HeldRemoteKey.FORWARD ||
+                key == com.example.tvlink.HeldRemoteKey.REWIND
+            ) {
+                // Accessibility D-pad global actions are individual presses, not a held KeyEvent,
+                // so the phone's UP ends the repeat timer without dispatching a synthetic key UP.
+                val releasedAt = android.os.SystemClock.elapsedRealtime()
+                lastHeldSeekReleaseElapsedMs = releasedAt
+                Log.i(
+                    INPUT_TRACE_TAG,
+                    "seek-release route=accessibility-dpad key=${key.wireName} elapsedRealtimeMs=$releasedAt"
+                )
             }
         },
         onTap = { heldKey ->
@@ -339,94 +319,42 @@ class RemoteService : Service() {
         onTrace = { message -> Log.i(INPUT_TRACE_TAG, message) }
     )
 
-    /**
-     * Builds a consistent synthetic keyboard-source media event.
-     *
-     * Android marks the first repeated DOWN after the long-press threshold with FLAG_LONG_PRESS.
-     * The TV's first repeat is scheduled at that threshold, so mark only repeatCount=1; later
-     * repeats and the matching UP must not carry the flag.
-     */
-    private fun createHeldMediaKeyEvent(
-        downTime: Long,
-        eventTime: Long,
-        action: Int,
-        keyCode: Int,
-        repeatCount: Int
-    ): KeyEvent {
-        val flags = if (action == KeyEvent.ACTION_DOWN && repeatCount == 1) {
-            KeyEvent.FLAG_LONG_PRESS
-        } else {
-            0
-        }
-        return KeyEvent(
-            downTime,
-            eventTime,
-            action,
-            keyCode,
-            repeatCount,
-            0,
-            KeyCharacterMap.VIRTUAL_KEYBOARD,
-            0,
-            flags,
-            InputDevice.SOURCE_KEYBOARD
-        )
-    }
-
-    /**
-     * Dispatches a held FF/REW media event without changing the existing hold policy.
-     * AudioManager.dispatchMediaKeyEvent() returns Unit, so diagnostics record whether the
-     * call began, returned normally, or threw; they do not claim Android accepted the event.
-     */
-    private fun dispatchHeldMediaKey(
-        key: com.example.tvlink.HeldRemoteKey,
-        phase: String,
-        event: KeyEvent
-    ) {
-        val elapsedRealtimeMs = android.os.SystemClock.elapsedRealtime()
-        val heldMs = (event.eventTime - event.downTime).coerceAtLeast(0L)
-        val eventSummary =
-            "key=${key.wireName} keyCode=${event.keyCode} action=${event.action} " +
-                "repeatCount=${event.repeatCount} flags=0x${event.flags.toString(16)} source=0x${event.source.toString(16)} " +
-                "downTimeUptimeMs=${event.downTime} eventTimeUptimeMs=${event.eventTime} heldMs=$heldMs"
-
-        Log.i(
-            INPUT_TRACE_TAG,
-            "media-key phase=$phase dispatch-call=begin $eventSummary elapsedRealtimeMs=$elapsedRealtimeMs"
-        )
-        try {
-            getSystemService(AudioManager::class.java).dispatchMediaKeyEvent(event)
-            Log.i(
-                INPUT_TRACE_TAG,
-                "media-key phase=$phase dispatch-call=returned $eventSummary " +
-                    "elapsedRealtimeMs=${android.os.SystemClock.elapsedRealtime()}"
-            )
-        } catch (t: Throwable) {
-            Log.e(
-                INPUT_TRACE_TAG,
-                "media-key phase=$phase dispatch-call=threw $eventSummary " +
-                    "elapsedRealtimeMs=${android.os.SystemClock.elapsedRealtime()}",
-                t
-            )
-            throw t
-        }
-    }
-
-    private fun sinceLastMediaSeekUpMs(nowElapsedRealtimeMs: Long): Long? {
-        val last = lastMediaSeekUpAttemptElapsedMs
+    private fun sinceLastSeekReleaseMs(nowElapsedRealtimeMs: Long): Long? {
+        val last = lastHeldSeekReleaseElapsedMs
         return if (last > 0L) (nowElapsedRealtimeMs - last).coerceAtLeast(0L) else null
     }
-
-    /** Accessibility global actions provide each vertical D-pad step; the watchdog repeats these while held. */
+    /**
+     * Network-held seeks use Android TV's standard D-pad playback controls:
+     * RIGHT advances and LEFT rewinds. AccessibilityService sends each as a real
+     * system-mediated D-pad action to the foreground app; the watchdog repeats
+     * the discrete actions while the phone's touch remains held.
+     */
     private fun performHeldDpadAction(key: com.example.tvlink.HeldRemoteKey): Boolean {
         val action = when (key) {
             com.example.tvlink.HeldRemoteKey.UP -> AccessibilityService.GLOBAL_ACTION_DPAD_UP
             com.example.tvlink.HeldRemoteKey.DOWN -> AccessibilityService.GLOBAL_ACTION_DPAD_DOWN
+            com.example.tvlink.HeldRemoteKey.FORWARD -> AccessibilityService.GLOBAL_ACTION_DPAD_RIGHT
+            com.example.tvlink.HeldRemoteKey.REWIND -> AccessibilityService.GLOBAL_ACTION_DPAD_LEFT
             else -> return false
         }
-        return PowerAccessibilityService.instance?.performGlobalAction(action) == true
-    }
-
-    /** One request line in, one answer out. Wi-Fi and Bluetooth keep the same protocol and denial response. */
+        val accepted = try {
+            PowerAccessibilityService.instance?.performGlobalAction(action) == true
+        } catch (e: Exception) {
+            Log.w(INPUT_TRACE_TAG, "D-pad action failed key=${key.wireName}", e)
+            false
+        }
+        if (key == com.example.tvlink.HeldRemoteKey.FORWARD ||
+            key == com.example.tvlink.HeldRemoteKey.REWIND
+        ) {
+            Log.i(
+                INPUT_TRACE_TAG,
+                "seek-input route=accessibility-dpad key=${key.wireName} " +
+                    "direction=${if (key == com.example.tvlink.HeldRemoteKey.FORWARD) "right" else "left"} " +
+                    "accepted=$accepted elapsedRealtimeMs=${android.os.SystemClock.elapsedRealtime()}"
+            )
+        }
+        return accepted
+    }    /** One request line in, one answer out. Wi-Fi and Bluetooth keep the same protocol and denial response. */
     private fun answer(line: String, clientKey: String, suppliedPin: String?): Pair<String, String> {
         val uri = Uri.parse("http://tv" + (line.split(" ").getOrNull(1) ?: "/"))
         if (pinLimiter.authenticate(clientKey, suppliedPin, pin(this)) != PinAuthResult.ACCEPTED) {
@@ -610,11 +538,11 @@ class RemoteService : Service() {
 
         val longPress = action == com.example.tvlink.RemotePressProtocol.ACTION_LONG
         val receivedElapsedMs = android.os.SystemClock.elapsedRealtime()
-        val seekAgeAtReceiveMs = sinceLastMediaSeekUpMs(receivedElapsedMs)?.toString() ?: "unknown"
+        val seekAgeAtReceiveMs = sinceLastSeekReleaseMs(receivedElapsedMs)?.toString() ?: "unknown"
         Log.i(
             INPUT_TRACE_TAG,
             "press-request key=${heldKey.wireName} action=$action requestId=$id " +
-                "elapsedRealtimeMs=$receivedElapsedMs sinceLastMediaSeekUpMs=$seekAgeAtReceiveMs"
+                "elapsedRealtimeMs=$receivedElapsedMs sinceLastSeekReleaseMs=$seekAgeAtReceiveMs"
         )
         val result = when (heldKey) {
             com.example.tvlink.HeldRemoteKey.BACK -> {
@@ -632,11 +560,11 @@ class RemoteService : Service() {
                         dpadCenter = {
                             val performed = service.performGlobalAction(AccessibilityService.GLOBAL_ACTION_DPAD_CENTER)
                             val dpadElapsedMs = android.os.SystemClock.elapsedRealtime()
-                            val seekAgeAtDpadMs = sinceLastMediaSeekUpMs(dpadElapsedMs)?.toString() ?: "unknown"
+                            val seekAgeAtDpadMs = sinceLastSeekReleaseMs(dpadElapsedMs)?.toString() ?: "unknown"
                             Log.i(
                                 INPUT_TRACE_TAG,
                                 "short-ok-dpad-center performed=$performed elapsedRealtimeMs=$dpadElapsedMs " +
-                                    "sinceLastMediaSeekUpMs=$seekAgeAtDpadMs"
+                                    "sinceLastSeekReleaseMs=$seekAgeAtDpadMs"
                             )
                             performed
                         },
@@ -647,11 +575,11 @@ class RemoteService : Service() {
             else -> "bad-press"
         }
         val resultElapsedMs = android.os.SystemClock.elapsedRealtime()
-        val seekAgeAtResultMs = sinceLastMediaSeekUpMs(resultElapsedMs)?.toString() ?: "unknown"
+        val seekAgeAtResultMs = sinceLastSeekReleaseMs(resultElapsedMs)?.toString() ?: "unknown"
         Log.i(
             INPUT_TRACE_TAG,
             "press-result key=${heldKey.wireName} action=$action result=$result requestId=$id " +
-                "elapsedRealtimeMs=$resultElapsedMs sinceLastMediaSeekUpMs=$seekAgeAtResultMs"
+                "elapsedRealtimeMs=$resultElapsedMs sinceLastSeekReleaseMs=$seekAgeAtResultMs"
         )
         completedPresses[id] = result
         if (completedPresses.size > 256) {
