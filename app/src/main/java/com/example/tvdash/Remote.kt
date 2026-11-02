@@ -354,7 +354,9 @@ class RemoteService : Service() {
             )
         }
         return accepted
-    }    /** One request line in, one answer out. Wi-Fi and Bluetooth keep the same protocol and denial response. */
+    }
+
+    /** One request line in, one answer out. Wi-Fi and Bluetooth keep the same protocol and denial response. */
     private fun answer(line: String, clientKey: String, suppliedPin: String?): Pair<String, String> {
         val uri = Uri.parse("http://tv" + (line.split(" ").getOrNull(1) ?: "/"))
         if (pinLimiter.authenticate(clientKey, suppliedPin, pin(this)) != PinAuthResult.ACCEPTED) {
