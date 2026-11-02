@@ -27,6 +27,8 @@ import android.os.IBinder
 import android.os.Looper
 import android.os.PowerManager
 import android.util.Log
+import android.view.InputDevice
+import android.view.KeyCharacterMap
 import android.view.KeyEvent
 import android.view.inputmethod.InputMethodManager
 import androidx.core.content.ContextCompat
@@ -272,7 +274,7 @@ class RemoteService : Service() {
             } else if (keyCode == null) {
                 "unsupported"
             } else {
-                val event = KeyEvent(downTime, downTime, KeyEvent.ACTION_DOWN, keyCode, 0)
+                val event = createHeldMediaKeyEvent(downTime, downTime, KeyEvent.ACTION_DOWN, keyCode, 0)
                 dispatchHeldMediaKey(key, "DOWN", event) // Keep accepting the hold as before; record the platform result.
                 "ok"
             }
@@ -291,7 +293,7 @@ class RemoteService : Service() {
                 }
                 if (keyCode != null) {
                     // Android models held-key repetition as additional ACTION_DOWN events with a nonzero repeat count.
-                    val event = KeyEvent(
+                    val event = createHeldMediaKeyEvent(
                         downTime,
                         android.os.SystemClock.uptimeMillis(),
                         KeyEvent.ACTION_DOWN,
@@ -312,7 +314,7 @@ class RemoteService : Service() {
                 com.example.tvlink.HeldRemoteKey.OK -> null
             }
             if (keyCode != null) {
-                val event = KeyEvent(downTime, android.os.SystemClock.uptimeMillis(), KeyEvent.ACTION_UP, keyCode, 0)
+                val event = createHeldMediaKeyEvent(downTime, android.os.SystemClock.uptimeMillis(), KeyEvent.ACTION_UP, keyCode, 0)
                 dispatchHeldMediaKey(key, "UP", event)
                 lastMediaSeekUpAttemptElapsedMs = android.os.SystemClock.elapsedRealtime()
             }
@@ -338,6 +340,39 @@ class RemoteService : Service() {
     )
 
     /**
+     * Builds a consistent synthetic keyboard-source media event.
+     *
+     * Android marks the first repeated DOWN after the long-press threshold with FLAG_LONG_PRESS.
+     * The TV's first repeat is scheduled at that threshold, so mark only repeatCount=1; later
+     * repeats and the matching UP must not carry the flag.
+     */
+    private fun createHeldMediaKeyEvent(
+        downTime: Long,
+        eventTime: Long,
+        action: Int,
+        keyCode: Int,
+        repeatCount: Int
+    ): KeyEvent {
+        val flags = if (action == KeyEvent.ACTION_DOWN && repeatCount == 1) {
+            KeyEvent.FLAG_LONG_PRESS
+        } else {
+            0
+        }
+        return KeyEvent(
+            downTime,
+            eventTime,
+            action,
+            keyCode,
+            repeatCount,
+            0,
+            KeyCharacterMap.VIRTUAL_KEYBOARD,
+            0,
+            flags,
+            InputDevice.SOURCE_KEYBOARD
+        )
+    }
+
+    /**
      * Dispatches a held FF/REW media event without changing the existing hold policy.
      * AudioManager.dispatchMediaKeyEvent() returns Unit, so diagnostics record whether the
      * call began, returned normally, or threw; they do not claim Android accepted the event.
@@ -351,8 +386,8 @@ class RemoteService : Service() {
         val heldMs = (event.eventTime - event.downTime).coerceAtLeast(0L)
         val eventSummary =
             "key=${key.wireName} keyCode=${event.keyCode} action=${event.action} " +
-                "repeatCount=${event.repeatCount} downTimeUptimeMs=${event.downTime} " +
-                "eventTimeUptimeMs=${event.eventTime} heldMs=$heldMs"
+                "repeatCount=${event.repeatCount} flags=0x${event.flags.toString(16)} source=0x${event.source.toString(16)} " +
+                "downTimeUptimeMs=${event.downTime} eventTimeUptimeMs=${event.eventTime} heldMs=$heldMs"
 
         Log.i(
             INPUT_TRACE_TAG,
