@@ -1,8 +1,6 @@
 package com.example.tvdash
 
 import android.accessibilityservice.AccessibilityService
-import android.accessibilityservice.GestureDescription
-import android.graphics.Path
 import android.graphics.Rect
 import android.content.Intent
 import android.os.Build
@@ -13,6 +11,7 @@ import android.os.SystemClock
 import android.util.Log
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
+import java.util.concurrent.TimeUnit
 
 /**
  * The remote's hands: D-pad, Back, sleep and typing into text boxes.
@@ -26,7 +25,7 @@ class PowerAccessibilityService : AccessibilityService() {
         private const val TAG = "TvDashA11y"
         private const val WATCHDOG_MS = 15_000L
         private const val EVENT_GAP_MS = 5_000L
-        private const val LONG_PRESS_GESTURE_MS = 800L
+        private val YOUTUBE_PACKAGES = setOf("com.google.android.youtube.tv", "com.google.android.youtube")
         @Volatile var instance: PowerAccessibilityService? = null
     }
 
@@ -142,22 +141,88 @@ class PowerAccessibilityService : AccessibilityService() {
     }
 
     /**
-     * Legacy Boolean API retained for the older held-key watchdog.
-     * The discrete Wi-Fi route uses [performFocusedLongClickResult] so it can report the
-     * difference between missing focus, unsupported long-click, and execution failure.
+     * Long OK is a D-pad key hold, not a touch gesture. On this rooted TV build, Android's input
+     * shell injects KEYCODE_DPAD_CENTER with FLAG_LONG_PRESS and the matching key-up. If root
+     * injection is unavailable, use the focused node's non-touch ACTION_LONG_CLICK instead.
      */
+    internal fun performLongOkResult(): DiscretePressResult {
+        val activePackage = activeWindowPackageName()
+        if (activePackage in YOUTUBE_PACKAGES) {
+            Log.i(TAG, "long-ok route=youtube-native-dpad package=$activePackage")
+            return when (dispatchRootDpadCenterLongPress()) {
+                RootInputResult.SENT -> DiscretePressResult.SUCCESS
+                RootInputResult.UNAVAILABLE -> performFocusedAccessibilityLongClickResult()
+                // The command may have dispatched before timing out. Do not try a second action.
+                RootInputResult.UNCERTAIN -> DiscretePressResult.ACTION_FAILED
+            }
+        }
+
+        // The reported failure is YouTube-only. Preserve ordinary app behavior without using touch.
+        Log.i(TAG, "long-ok route=accessibility package=${activePackage ?: "unknown"}")
+        return performFocusedAccessibilityLongClickResult()
+    }
+
+    /** Returns the foreground accessibility window's package without assuming it is touch-capable. */
+    private fun activeWindowPackageName(): String? {
+        try {
+            rootInActiveWindow?.packageName?.toString()?.let { return it }
+        } catch (t: Throwable) {
+            Log.w(TAG, "active window package lookup failed", t)
+        }
+        return try {
+            windows.firstOrNull { it.isFocused }?.root?.packageName?.toString()
+        } catch (t: Throwable) {
+            Log.w(TAG, "focused window package lookup failed", t)
+            null
+        }
+    }
+
+    /** Legacy Boolean API retained for any older caller. */
     fun performFocusedLongClick(): Boolean =
-        performFocusedLongClickResult() == DiscretePressResult.SUCCESS
+        performLongOkResult() == DiscretePressResult.SUCCESS
+
+    private enum class RootInputResult { SENT, UNAVAILABLE, UNCERTAIN }
 
     /**
-     * Prefer the node's native long-click action. If the app does not expose it (or rejects it),
-     * emulate a physical touch-and-hold at the focused control's screen center.
+     * Uses the firmware's root shell to inject a genuine non-touch D-pad-center long press.
+     * The command is fixed (no user-controlled shell text) and bounded to avoid wedging a worker.
      */
-    internal fun performFocusedLongClickResult(): DiscretePressResult {
+    private fun dispatchRootDpadCenterLongPress(): RootInputResult {
+        var process: Process? = null
+        return try {
+            process = ProcessBuilder(
+                "su", "0", "sh", "-c",
+                "input dpad keyevent --longpress KEYCODE_DPAD_CENTER"
+            ).redirectErrorStream(true).start()
+            process.outputStream.close()
+
+            if (!process.waitFor(3L, TimeUnit.SECONDS)) {
+                process.destroyForcibly()
+                Log.w(TAG, "long-ok root key injection timed out; refusing a second dispatch")
+                RootInputResult.UNCERTAIN
+            } else {
+                val output = process.inputStream.bufferedReader().use { it.readText().trim() }
+                val exitCode = process.exitValue()
+                Log.i(TAG, "long-ok root key injection exitCode=$exitCode output=${output.take(160)}")
+                if (exitCode == 0) RootInputResult.SENT else RootInputResult.UNAVAILABLE
+            }
+        } catch (t: Throwable) {
+            Log.w(TAG, "long-ok root key injection unavailable", t)
+            RootInputResult.UNAVAILABLE
+        } finally {
+            process?.let { if (it.isAlive) it.destroyForcibly() }
+        }
+    }
+
+    /**
+     * Non-touch fallback for devices where the root input command is unavailable. This only
+     * invokes ACTION_LONG_CLICK when the focused node advertises that action; it never taps/selects.
+     */
+    private fun performFocusedAccessibilityLongClickResult(): DiscretePressResult {
         return try {
             val focused = findFocusedNode()
                 ?: run {
-                    Log.w(TAG, "long-ok target lookup found no focused accessibility node")
+                    Log.w(TAG, "long-ok accessibility fallback found no focused node")
                     return DiscretePressResult.NO_FOCUS
                 }
             logLongOkTarget(focused)
@@ -166,23 +231,21 @@ class PowerAccessibilityService : AccessibilityService() {
             val supported = focused.isLongClickable ||
                 focused.actionList.any { it.id == longClickId }
 
-            if (supported) {
-                val performed = focused.performAction(AccessibilityNodeInfo.ACTION_LONG_CLICK)
-                Log.i(TAG, "focused long-click package=${focused.packageName} class=${focused.className} performed=$performed")
-                if (performed) return DiscretePressResult.SUCCESS
-                Log.i(TAG, "native long-click was rejected; trying touch-hold fallback")
-            } else {
-                Log.i(TAG, "focused node does not expose long-click; trying touch-hold fallback package=${focused.packageName} class=${focused.className}")
+            if (!supported) {
+                Log.i(TAG, "long-ok accessibility fallback unsupported package=${focused.packageName} class=${focused.className}")
+                return DiscretePressResult.LONG_CLICK_UNSUPPORTED
             }
 
-            dispatchFocusedTouchHold(focused)
+            val performed = focused.performAction(AccessibilityNodeInfo.ACTION_LONG_CLICK)
+            Log.i(TAG, "long-ok ACTION_LONG_CLICK package=${focused.packageName} class=${focused.className} performed=$performed")
+            if (performed) DiscretePressResult.SUCCESS else DiscretePressResult.ACTION_FAILED
         } catch (t: Throwable) {
-            Log.w(TAG, "focused long-click failed", t)
+            Log.w(TAG, "long-ok accessibility fallback failed", t)
             DiscretePressResult.ACTION_FAILED
         }
     }
 
-    /** Records the exact kind of focused node used by native long-click or touch-hold. */
+    /** Records the focused node considered by the non-touch accessibility fallback. */
     private fun logLongOkTarget(node: AccessibilityNodeInfo) {
         val bounds = Rect()
         node.getBoundsInScreen(bounds)
@@ -193,54 +256,6 @@ class PowerAccessibilityService : AccessibilityService() {
                 "visible=${node.isVisibleToUser} clickable=${node.isClickable} " +
                 "longClickable=${node.isLongClickable} bounds=$bounds"
         )
-    }
-
-    /**
-     * Dispatches a stationary 800 ms touch at the center of the focused node.
-     * A successful return means Android accepted the gesture; the callback records
-     * whether the gesture subsequently completed or was cancelled.
-     */
-    private fun dispatchFocusedTouchHold(focused: AccessibilityNodeInfo): DiscretePressResult {
-        if (!focused.isVisibleToUser) {
-            Log.w(TAG, "touch-hold target is not visible package=${focused.packageName} class=${focused.className}")
-            return DiscretePressResult.ACTION_FAILED
-        }
-
-        val bounds = Rect()
-        focused.getBoundsInScreen(bounds)
-        if (bounds.isEmpty) {
-            Log.w(TAG, "touch-hold target has empty screen bounds package=${focused.packageName} class=${focused.className}")
-            return DiscretePressResult.ACTION_FAILED
-        }
-
-        val packageName = focused.packageName?.toString() ?: "unknown"
-        val className = focused.className?.toString() ?: "unknown"
-        val path = Path().apply {
-            moveTo(bounds.centerX().toFloat(), bounds.centerY().toFloat())
-        }
-        val gesture = GestureDescription.Builder()
-            .addStroke(GestureDescription.StrokeDescription(path, 0L, LONG_PRESS_GESTURE_MS))
-            .build()
-
-        val accepted = dispatchGesture(
-            gesture,
-            object : GestureResultCallback() {
-                override fun onCompleted(gestureDescription: GestureDescription?) {
-                    Log.i(TAG, "touch-hold completed package=$packageName class=$className bounds=$bounds durationMs=$LONG_PRESS_GESTURE_MS")
-                }
-
-                override fun onCancelled(gestureDescription: GestureDescription?) {
-                    Log.w(TAG, "touch-hold cancelled package=$packageName class=$className bounds=$bounds")
-                }
-            },
-            handler
-        )
-
-        Log.i(
-            TAG,
-            "touch-hold dispatch accepted=$accepted package=$packageName class=$className bounds=$bounds durationMs=$LONG_PRESS_GESTURE_MS"
-        )
-        return if (accepted) DiscretePressResult.SUCCESS else DiscretePressResult.ACTION_FAILED
     }
 
     /**

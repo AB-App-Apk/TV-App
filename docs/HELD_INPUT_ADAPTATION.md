@@ -22,7 +22,7 @@
 
 ## Platform limitation
 
-`AccessibilityService.performGlobalAction()` cannot represent a native held Back or OK key. On Wi-Fi, TV Dash therefore implements deliberate gesture semantics instead of pretending to send native key-down events: taps are sent once on release, long Back sends one Back action, and long OK tries `AccessibilityNodeInfo.ACTION_LONG_CLICK` on the focused node before falling back to one center action. No Back/OK auto-repeat is generated. This focused-node long-click depends on the target app exposing a focused, long-clickable accessibility node; Bluetooth HID remains the native press/release route.
+`AccessibilityService.performGlobalAction()` cannot represent a native held Back or OK key. On Wi-Fi, short Back/OK taps are sent once on release and long Back sends one Back action. The long-OK failure described for this TV occurs in YouTube, so the root-shell route is deliberately limited to `com.google.android.youtube.tv` and `com.google.android.youtube`. There, TV Dash injects D-pad-source `KEYCODE_DPAD_CENTER` with `--longpress`, producing a non-touch key-down/long-press/key-up sequence. If root injection is unavailable, TV Dash tries the focused node's `AccessibilityNodeInfo.ACTION_LONG_CLICK`. Other apps retain the focused-node accessibility long-click path and do not receive the YouTube-specific injected event. There is no touchscreen gesture fallback and no short-center fallback, so a failed long press cannot accidentally select the highlighted item. Root authorization for TV Dash may be required by the firmware's `su` manager. The phone's Bluetooth HID path is unchanged and remains the preferred native press/release route.
 
 For network-held Fast Forward/Rewind, the watchdog uses AccessibilityService DPAD RIGHT/LEFT global actions (500 ms initial delay, 250 ms interval). Each action is a discrete foreground-navigation event; phone UP cancels the repeat job and does not send a synthetic media-key UP. Bluetooth HID remains the native Consumer Control media-key path. For network-held UP/DOWN, TV Dash performs the corresponding AccessibilityService global action once immediately and repeats that action on the same cadence. The TV-side repeats are independent of Wi-Fi/RFCOMM lease renewals. Verify seek preview, scrubbing, and OK confirmation on the target TV, as player and firmware behavior can vary.
 
@@ -38,7 +38,9 @@ The phone's existing Bluetooth setup still requests its required Nearby devices 
 - [ ] Hold Back and OK with Bluetooth HID: native HID report stays down until finger-up; cancellation also releases.
 - [ ] Tap Back and OK over Wi-Fi: exactly one action per tap.
 - [ ] Hold Back over Wi-Fi: exactly one Back action, no repeat.
-- [ ] Hold OK over Wi-Fi: attempt focused-node long-click; if unsupported, exactly one OK action.
+- [ ] Hold OK over Wi-Fi in YouTube: verify D-pad-source native DPAD_CENTER long-press; revoke root and verify focused-node ACTION_LONG_CLICK fallback; confirm failure never becomes short OK.
+- [ ] Hold OK over Wi-Fi in a non-YouTube app: verify the existing focused-node ACTION_LONG_CLICK behavior remains in use.
+- [ ] Hold OK over Bluetooth HID in YouTube and other apps: verify existing native HID press/release behavior is unchanged.
 - [ ] Cancel a Back/OK touch (e.g. pointer cancellation): no tap or long-press action is emitted.
 - [ ] Hold UP and DOWN over Wi-Fi: vertical navigation repeats after the initial delay and stops promptly on release.
 - [ ] Hold UP and DOWN over Bluetooth HID: native keyboard reports stay down until release; taps still move exactly one step.
