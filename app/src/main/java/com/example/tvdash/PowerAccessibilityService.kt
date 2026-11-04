@@ -25,6 +25,7 @@ class PowerAccessibilityService : AccessibilityService() {
         private const val TAG = "TvDashA11y"
         private const val WATCHDOG_MS = 15_000L
         private const val EVENT_GAP_MS = 5_000L
+        private val YOUTUBE_PACKAGES = setOf("com.google.android.youtube.tv", "com.google.android.youtube")
         @Volatile var instance: PowerAccessibilityService? = null
     }
 
@@ -145,11 +146,34 @@ class PowerAccessibilityService : AccessibilityService() {
      * injection is unavailable, use the focused node's non-touch ACTION_LONG_CLICK instead.
      */
     internal fun performLongOkResult(): DiscretePressResult {
-        return when (dispatchRootDpadCenterLongPress()) {
-            RootInputResult.SENT -> DiscretePressResult.SUCCESS
-            RootInputResult.UNAVAILABLE -> performFocusedAccessibilityLongClickResult()
-            // The command may have dispatched before timing out. Do not try a second action.
-            RootInputResult.UNCERTAIN -> DiscretePressResult.ACTION_FAILED
+        val activePackage = activeWindowPackageName()
+        if (activePackage in YOUTUBE_PACKAGES) {
+            Log.i(TAG, "long-ok route=youtube-native-dpad package=$activePackage")
+            return when (dispatchRootDpadCenterLongPress()) {
+                RootInputResult.SENT -> DiscretePressResult.SUCCESS
+                RootInputResult.UNAVAILABLE -> performFocusedAccessibilityLongClickResult()
+                // The command may have dispatched before timing out. Do not try a second action.
+                RootInputResult.UNCERTAIN -> DiscretePressResult.ACTION_FAILED
+            }
+        }
+
+        // The reported failure is YouTube-only. Preserve ordinary app behavior without using touch.
+        Log.i(TAG, "long-ok route=accessibility package=${activePackage ?: "unknown"}")
+        return performFocusedAccessibilityLongClickResult()
+    }
+
+    /** Returns the foreground accessibility window's package without assuming it is touch-capable. */
+    private fun activeWindowPackageName(): String? {
+        try {
+            rootInActiveWindow?.packageName?.toString()?.let { return it }
+        } catch (t: Throwable) {
+            Log.w(TAG, "active window package lookup failed", t)
+        }
+        return try {
+            windows.firstOrNull { it.isFocused }?.root?.packageName?.toString()
+        } catch (t: Throwable) {
+            Log.w(TAG, "focused window package lookup failed", t)
+            null
         }
     }
 
@@ -168,7 +192,7 @@ class PowerAccessibilityService : AccessibilityService() {
         return try {
             process = ProcessBuilder(
                 "su", "0", "sh", "-c",
-                "input keyevent --longpress KEYCODE_DPAD_CENTER"
+                "input dpad keyevent --longpress KEYCODE_DPAD_CENTER"
             ).redirectErrorStream(true).start()
             process.outputStream.close()
 
