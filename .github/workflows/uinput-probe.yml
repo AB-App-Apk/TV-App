@@ -24,8 +24,6 @@ jobs:
         uses: android-actions/setup-android@v3
         with:
           packages: platform-tools
-        with:
-          packages: platform-tools
 
       - name: Install pinned Android NDK
         run: |
