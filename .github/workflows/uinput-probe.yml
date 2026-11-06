@@ -46,14 +46,11 @@ jobs:
           TOOLCHAIN="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin"
           mkdir -p build/uinput-probe
           # Static guard: this diagnostic must not emit input_event records.
-          if grep -Eq 'write[[:space:]]*\\\\(|struct[[:space:]]+input_event' tools/uinput-probe/uinput_probe.c; then
+          if grep -Eq 'write[[:space:]]*\(|struct[[:space:]]+input_event' tools/uinput-probe/uinput_probe.c; then
             echo "::error::Probe source contains a key-event write path."
             exit 1
           fi
-          "$TOOLCHAIN/armv7a-linux-androideabi26-clang" \\
-            -std=c11 -O2 -Wall -Wextra -Werror -fPIE -pie \\
-            tools/uinput-probe/uinput_probe.c \\
-            -o build/uinput-probe/uinput_probe
+          "$TOOLCHAIN/armv7a-linux-androideabi26-clang" -std=c11 -O2 -Wall -Wextra -Werror -fPIE -pie tools/uinput-probe/uinput_probe.c -o build/uinput-probe/uinput_probe
           "$TOOLCHAIN/llvm-readelf" -h build/uinput-probe/uinput_probe | tee build/uinput-probe/elf-header.txt
           grep -q 'Class:.*ELF32' build/uinput-probe/elf-header.txt
           grep -q 'Machine:.*ARM' build/uinput-probe/elf-header.txt
