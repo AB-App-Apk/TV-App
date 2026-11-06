@@ -1,0 +1,70 @@
+name: Build safe uinput probe
+
+on:
+  push:
+    branches:
+      - "probe/uinput-create-destroy-only"
+    paths:
+      - "tools/uinput-probe/uinput_probe.c"
+      - ".github/workflows/uinput-probe.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout probe branch
+        uses: actions/checkout@v4
+
+      - name: Install Android SDK command-line tools
+        uses: android-actions/setup-android@v3
+
+      - name: Install pinned Android NDK
+        run: |
+          set -euo pipefail
+          sdkmanager --install "ndk;27.0.12077973"
+          echo "ANDROID_NDK_HOME=$ANDROID_SDK_ROOT/ndk/27.0.12077973" >> "$GITHUB_ENV"
+
+      - name: Verify NDK uinput headers and toolchain
+        run: |
+          set -euo pipefail
+          test -r "$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/include/linux/uinput.h"
+          test -x "$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/armv7a-linux-androideabi26-clang"
+          grep -q "UI_DEV_CREATE" "$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/include/linux/uinput.h"
+          echo "NDK_HEADER_UINPUT=PASS"
+          echo "TARGET_COMPILER_ARMV7_API26=PASS"
+
+      - name: Compile probe for armeabi-v7a
+        run: |
+          set -euo pipefail
+          TOOLCHAIN="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          mkdir -p build/uinput-probe
+          # Static guard: this diagnostic must not emit input_event records.
+          if grep -Eq 'write[[:space:]]*\\(|struct[[:space:]]+input_event' tools/uinput-probe/uinput_probe.c; then
+            echo "::error::Probe source contains a key-event write path."
+            exit 1
+          fi
+          "$TOOLCHAIN/armv7a-linux-androideabi26-clang" \
+            -std=c11 -O2 -Wall -Wextra -Werror -fPIE -pie \
+            tools/uinput-probe/uinput_probe.c \
+            -o build/uinput-probe/uinput_probe
+          "$TOOLCHAIN/llvm-readelf" -h build/uinput-probe/uinput_probe | tee build/uinput-probe/elf-header.txt
+          grep -q 'Class:.*ELF32' build/uinput-probe/elf-header.txt
+          grep -q 'Machine:.*ARM' build/uinput-probe/elf-header.txt
+          sha256sum build/uinput-probe/uinput_probe | tee build/uinput-probe/SHA256SUMS
+          echo "NATIVE_COMPILE=PASS"
+          echo "TARGET_ABI=armeabi-v7a"
+
+      - name: Upload probe binary and build evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: uinput-probe-armeabi-v7a
+          path: |
+            build/uinput-probe/uinput_probe
+            build/uinput-probe/elf-header.txt
+            build/uinput-probe/SHA256SUMS
+          if-no-files-found: error
