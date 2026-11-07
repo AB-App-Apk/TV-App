@@ -1,4 +1,4 @@
-name: Build safe uinput probe
+name: Build uinput diagnostic probes
 
 on:
   push:
@@ -6,6 +6,7 @@ on:
       - "probe/uinput-create-destroy-only"
     paths:
       - "tools/uinput-probe/uinput_probe.c"
+      - "tools/uinput-probe/uinput_enter_hold_probe.c"
       - ".github/workflows/uinput-probe.yml"
   workflow_dispatch:
 
@@ -40,14 +41,14 @@ jobs:
           echo "NDK_HEADER_UINPUT=PASS"
           echo "TARGET_COMPILER_ARMV7_API26=PASS"
 
-      - name: Compile probe for armeabi-v7a
+      - name: Compile creation-only probe for armeabi-v7a
         run: |
           set -euo pipefail
           TOOLCHAIN="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin"
           mkdir -p build/uinput-probe
-          # Static guard: this diagnostic must not emit input_event records.
+          # This first diagnostic is intentionally forbidden from writing input_event records.
           if grep -Eq 'write[[:space:]]*\(|struct[[:space:]]+input_event' tools/uinput-probe/uinput_probe.c; then
-            echo "::error::Probe source contains a key-event write path."
+            echo "::error::Creation-only probe contains an input-event write path."
             exit 1
           fi
           "$TOOLCHAIN/armv7a-linux-androideabi26-clang" -std=c11 -O2 -Wall -Wextra -Werror -fPIE -pie tools/uinput-probe/uinput_probe.c -o build/uinput-probe/uinput_probe
@@ -55,10 +56,58 @@ jobs:
           grep -q 'Class:.*ELF32' build/uinput-probe/elf-header.txt
           grep -q 'Machine:.*ARM' build/uinput-probe/elf-header.txt
           sha256sum build/uinput-probe/uinput_probe | tee build/uinput-probe/SHA256SUMS
-          echo "NATIVE_COMPILE=PASS"
+          echo "CREATE_ONLY_COMPILE=PASS"
           echo "TARGET_ABI=armeabi-v7a"
 
-      - name: Upload probe binary and build evidence
+      - name: Audit and compile bounded KEY_ENTER hold probe
+        run: |
+          set -euo pipefail
+          SOURCE="tools/uinput-probe/uinput_enter_hold_probe.c"
+          python3 - <<'PY'
+          from pathlib import Path
+
+          source = Path("tools/uinput-probe/uinput_enter_hold_probe.c").read_text()
+          required = [
+              "KEY_ENTER",
+              "EV_KEY",
+              "EV_SYN",
+              "SYN_REPORT",
+              "CLOCK_MONOTONIC",
+              "HOLD_DURATION_MS 1200",
+              "UI_DEV_CREATE",
+              "UI_DEV_DESTROY",
+              "CLEANUP_KEY_UP_BEGIN",
+          ]
+          forbidden = [
+              "KEY_DPAD_CENTER",
+              "BTN_TOUCH",
+              "EV_ABS",
+              "EV_REL",
+          ]
+          for token in required:
+              if token not in source:
+                  raise SystemExit(f"::error::Missing required hold-probe token: {token}")
+          for token in forbidden:
+              if token in source:
+                  raise SystemExit(f"::error::Forbidden non-Enter input capability: {token}")
+          if source.count("write(g_fd, events, sizeof(events))") != 1:
+              raise SystemExit("::error::Expected exactly one bounded event-write site.")
+          if source.count("events[0].code = KEY_ENTER") != 1:
+              raise SystemExit("::error::Expected exactly one KEY_ENTER event construction site.")
+          print("HOLD_PROBE_SCOPE_AUDIT=PASS")
+          print("INPUT_SCOPE=KEY_ENTER_ONLY")
+          print("TOUCH_AND_POINTER_EVENTS=ABSENT")
+          PY
+          TOOLCHAIN="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          "$TOOLCHAIN/armv7a-linux-androideabi26-clang" -std=c11 -O2 -Wall -Wextra -Werror -fPIE -pie "$SOURCE" -o build/uinput-probe/uinput_enter_hold_probe
+          "$TOOLCHAIN/llvm-readelf" -h build/uinput-probe/uinput_enter_hold_probe | tee build/uinput-probe/elf-header-enter-hold.txt
+          grep -q 'Class:.*ELF32' build/uinput-probe/elf-header-enter-hold.txt
+          grep -q 'Machine:.*ARM' build/uinput-probe/elf-header-enter-hold.txt
+          sha256sum build/uinput-probe/uinput_enter_hold_probe | tee build/uinput-probe/SHA256SUMS-enter-hold.txt
+          echo "ENTER_HOLD_COMPILE=PASS"
+          echo "TARGET_ABI=armeabi-v7a"
+
+      - name: Upload uinput binaries and build evidence
         uses: actions/upload-artifact@v4
         with:
           name: uinput-probe-armeabi-v7a
@@ -66,4 +115,7 @@ jobs:
             build/uinput-probe/uinput_probe
             build/uinput-probe/elf-header.txt
             build/uinput-probe/SHA256SUMS
+            build/uinput-probe/uinput_enter_hold_probe
+            build/uinput-probe/elf-header-enter-hold.txt
+            build/uinput-probe/SHA256SUMS-enter-hold.txt
           if-no-files-found: error
