@@ -27,7 +27,7 @@ jobs:
         run: |
           set -euo pipefail
           sdkmanager --install "ndk;27.0.12077973"
-          echo "ANDROID_NDK_HOME=$ANDROID_SDK_ROOT/ndk/27.0.12077973" >> "$GITHUB_ENV"
+          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/27.0.12077973" >> "$GITHUB_ENV"
       - name: Compile, inspect, and stage the ARMv7 uinput executable
         run: |
           set -euo pipefail
