@@ -68,7 +68,7 @@ internal object UinputEnterHoldAsset {
                 }
             }
 
-            val actualHash = digest.digest().joinToString("") { "%02x".format(it) }
+            val actualHash = digest.digest().joinToString("") { "%02x".format(it.toInt() and 0xff) }
             if (totalBytes == 0L || actualHash != expectedHash) {
                 throw IOException(
                     "Packaged uinput executable checksum mismatch: expected=$expectedHash actual=$actualHash bytes=$totalBytes"
