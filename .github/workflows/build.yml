@@ -100,7 +100,11 @@ jobs:
           set -euo pipefail
           EXPECTED="$(awk '{print $1}' build/uinput-enter-hold/SHA256SUMS)"
           ENTRY="assets/uinput/armeabi-v7a/uinput_enter_hold_probe"
-          for APK in app/build/outputs/apk/debug/app-debug.apk app/build/outputs/apk/release/app-release.apk; do
+          echo "DEBUG_APK_OUTPUTS:"
+          ls -lah app/build/outputs/apk/debug
+          echo "UNSIGNED_RELEASE_APK_OUTPUTS:"
+          ls -lah app/build/outputs/apk/release
+          for APK in app/build/outputs/apk/debug/app-debug.apk app/build/outputs/apk/release/app-release-unsigned.apk; do
             test -s "$APK"
             ACTUAL="$(unzip -p "$APK" "$ENTRY" | sha256sum | awk '{print $1}')"
             test -n "$ACTUAL"
