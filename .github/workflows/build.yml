@@ -20,12 +20,101 @@ jobs:
         with:
           distribution: temurin
           java-version: 17
+      - uses: android-actions/setup-android@v3
+        with:
+          packages: platform-tools
+      - name: Install pinned Android NDK
+        run: |
+          set -euo pipefail
+          sdkmanager --install "ndk;27.0.12077973"
+          echo "ANDROID_NDK_HOME=$ANDROID_SDK_ROOT/ndk/27.0.12077973" >> "$GITHUB_ENV"
+      - name: Compile, inspect, and stage the ARMv7 uinput executable
+        run: |
+          set -euo pipefail
+          SOURCE="tools/uinput-probe/uinput_enter_hold_probe.c"
+          OUT="build/uinput-enter-hold"
+          ASSET_DIR="app/src/main/assets/uinput/armeabi-v7a"
+          ASSET="$ASSET_DIR/uinput_enter_hold_probe"
+          TOOLCHAIN="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          COMPILER="$TOOLCHAIN/armv7a-linux-androideabi26-clang"
+          READELF="$TOOLCHAIN/llvm-readelf"
+
+          test -s "$SOURCE"
+          test -x "$COMPILER"
+          test -x "$READELF"
+          mkdir -p "$OUT" "$ASSET_DIR"
+
+          python3 - <<'PY'
+          from pathlib import Path
+
+          source = Path("tools/uinput-probe/uinput_enter_hold_probe.c").read_text()
+          required = [
+              "KEY_ENTER", "EV_KEY", "EV_SYN", "SYN_REPORT",
+              "CLOCK_MONOTONIC", "HOLD_DURATION_MS 1200",
+              "UI_DEV_CREATE", "UI_DEV_DESTROY", "CLEANUP_KEY_UP_BEGIN",
+          ]
+          forbidden = [
+              "KEY_DPAD_CENTER", "BTN_TOUCH", "EV_ABS", "EV_REL",
+          ]
+          for token in required:
+              if token not in source:
+                  raise SystemExit(f"::error::Missing required native-source token: {token}")
+          for token in forbidden:
+              if token in source:
+                  raise SystemExit(f"::error::Forbidden input capability in native source: {token}")
+          if source.count("write(g_fd, events, sizeof(events))") != 1:
+              raise SystemExit("::error::Expected exactly one input-event write site.")
+          if source.count("events[0].code = KEY_ENTER") != 1:
+              raise SystemExit("::error::Expected exactly one KEY_ENTER event construction site.")
+          print("UINPUT_SOURCE_SCOPE_AUDIT=PASS")
+          print("INPUT_CAPABILITIES=KEY_ENTER_ONLY")
+          print("USERSPACE_REPEAT_EVENTS=ABSENT")
+          PY
+
+          "$COMPILER" -std=c11 -O2 -Wall -Wextra -Werror -fPIE -pie "$SOURCE" -o "$OUT/uinput_enter_hold_probe"
+          "$READELF" -h -l -d "$OUT/uinput_enter_hold_probe" | tee "$OUT/elf-inspection.txt"
+          grep -q 'Class:.*ELF32' "$OUT/elf-inspection.txt"
+          grep -q 'Data:.*little endian' "$OUT/elf-inspection.txt"
+          grep -q 'Machine:.*ARM' "$OUT/elf-inspection.txt"
+          grep -q 'Type:.*DYN' "$OUT/elf-inspection.txt"
+          grep -Fq '/system/bin/linker' "$OUT/elf-inspection.txt"
+          grep -Fq 'libc.so' "$OUT/elf-inspection.txt"
+          grep -Fq 'libdl.so' "$OUT/elf-inspection.txt"
+
+          chmod 0644 "$OUT/uinput_enter_hold_probe"
+          (cd "$OUT" && sha256sum uinput_enter_hold_probe > SHA256SUMS)
+          install -m 0644 "$OUT/uinput_enter_hold_probe" "$ASSET"
+          cmp "$OUT/uinput_enter_hold_probe" "$ASSET"
+          echo "UINPUT_TARGET_ABI=armeabi-v7a"
+          echo "UINPUT_ANDROID_API=26"
+          echo "UINPUT_ASSET_STAGED=PASS"
+          cat "$OUT/SHA256SUMS"
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: 8.9
       # PR validation uses no signing secrets or release keystore.
       - name: Run unit tests and debug compile smoke-check
         run: gradle :app:testDebugUnitTest :remote:testDebugUnitTest :app:assembleDebug :remote:assembleDebug :app:assembleRelease :remote:assembleRelease --no-daemon
+      - name: Verify exact native executable bytes inside test APKs
+        run: |
+          set -euo pipefail
+          EXPECTED="$(awk '{print $1}' build/uinput-enter-hold/SHA256SUMS)"
+          ENTRY="assets/uinput/armeabi-v7a/uinput_enter_hold_probe"
+          for APK in app/build/outputs/apk/debug/app-debug.apk app/build/outputs/apk/release/app-release.apk; do
+            test -s "$APK"
+            ACTUAL="$(unzip -p "$APK" "$ENTRY" | sha256sum | awk '{print $1}')"
+            test -n "$ACTUAL"
+            test "$ACTUAL" = "$EXPECTED"
+            echo "APK_ASSET_VERIFY=PASS APK=$APK SHA256=$ACTUAL"
+          done
+      - uses: actions/upload-artifact@v4
+        with:
+          name: uinput-enter-hold-armv7a
+          path: |
+            build/uinput-enter-hold/uinput_enter_hold_probe
+            build/uinput-enter-hold/SHA256SUMS
+            build/uinput-enter-hold/elf-inspection.txt
+          if-no-files-found: error
 
   build:
     if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
@@ -42,6 +131,22 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: 8.9
+      - uses: actions/download-artifact@v4
+        with:
+          name: uinput-enter-hold-armv7a
+          path: build/uinput-enter-hold-package
+      - name: Verify and stage the exact tested native executable for release
+        run: |
+          set -euo pipefail
+          PACKAGE_DIR="build/uinput-enter-hold-package"
+          ASSET_DIR="app/src/main/assets/uinput/armeabi-v7a"
+          ASSET="$ASSET_DIR/uinput_enter_hold_probe"
+          (cd "$PACKAGE_DIR" && sha256sum -c SHA256SUMS)
+          mkdir -p "$ASSET_DIR"
+          install -m 0644 "$PACKAGE_DIR/uinput_enter_hold_probe" "$ASSET"
+          cmp "$PACKAGE_DIR/uinput_enter_hold_probe" "$ASSET"
+          echo "RELEASE_UINPUT_ASSET_STAGED=PASS"
+          cat "$PACKAGE_DIR/SHA256SUMS"
       - name: Prepare signing key and build number
         env:
           ANDROID_SIGNING_KEY_BASE64: ${{ secrets.ANDROID_SIGNING_KEY_BASE64 }}
@@ -68,6 +173,17 @@ jobs:
           ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: gradle :app:assembleRelease :remote:assembleRelease -PbuildNumber=${{ github.run_number }} --no-daemon
+      - name: Verify exact native executable bytes inside signed TvDash APK
+        run: |
+          set -euo pipefail
+          EXPECTED="$(awk '{print $1}' build/uinput-enter-hold-package/SHA256SUMS)"
+          APK="app/build/outputs/apk/release/app-release.apk"
+          ENTRY="assets/uinput/armeabi-v7a/uinput_enter_hold_probe"
+          test -s "$APK"
+          ACTUAL="$(unzip -p "$APK" "$ENTRY" | sha256sum | awk '{print $1}')"
+          test -n "$ACTUAL"
+          test "$ACTUAL" = "$EXPECTED"
+          echo "SIGNED_RELEASE_ASSET_VERIFY=PASS SHA256=$ACTUAL"
       - name: Remove signing key from runner
         if: always()
         run: rm -f release.keystore
