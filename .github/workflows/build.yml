@@ -102,6 +102,8 @@ jobs:
           set -euo pipefail
           EXPECTED="$(awk '{print $1}' build/uinput-enter-hold/SHA256SUMS)"
           ENTRY="assets/uinput/armeabi-v7a/uinput_enter_hold_probe"
+          MANIFEST_ENTRY="assets/uinput/armeabi-v7a/uinput_enter_hold_probe.sha256"
+          EXPECTED_MANIFEST="$(cat build/uinput-enter-hold/SHA256SUMS)"
           echo "DEBUG_APK_OUTPUTS:"
           ls -lah app/build/outputs/apk/debug
           echo "UNSIGNED_RELEASE_APK_OUTPUTS:"
@@ -111,6 +113,10 @@ jobs:
             ACTUAL="$(unzip -p "$APK" "$ENTRY" | sha256sum | awk '{print $1}')"
             test -n "$ACTUAL"
             test "$ACTUAL" = "$EXPECTED"
+            MANIFEST="$(unzip -p "$APK" "$MANIFEST_ENTRY")"
+            test -n "$MANIFEST"
+            test "$MANIFEST" = "$EXPECTED_MANIFEST"
+            echo "APK_MANIFEST_VERIFY=PASS APK=$APK"
             echo "APK_ASSET_VERIFY=PASS APK=$APK SHA256=$ACTUAL"
           done
       - uses: actions/upload-artifact@v4
@@ -147,10 +153,15 @@ jobs:
           PACKAGE_DIR="build/uinput-enter-hold-package"
           ASSET_DIR="app/src/main/assets/uinput/armeabi-v7a"
           ASSET="$ASSET_DIR/uinput_enter_hold_probe"
+          ASSET_MANIFEST="$ASSET_DIR/uinput_enter_hold_probe.sha256"
           (cd "$PACKAGE_DIR" && sha256sum -c SHA256SUMS)
           mkdir -p "$ASSET_DIR"
           install -m 0644 "$PACKAGE_DIR/uinput_enter_hold_probe" "$ASSET"
+          install -m 0644 "$PACKAGE_DIR/SHA256SUMS" "$ASSET_MANIFEST"
           cmp "$PACKAGE_DIR/uinput_enter_hold_probe" "$ASSET"
+          cmp "$PACKAGE_DIR/SHA256SUMS" "$ASSET_MANIFEST"
+          echo "RELEASE_UINPUT_BINARY_STAGED=PASS"
+          echo "RELEASE_UINPUT_MANIFEST_STAGED=PASS"
           echo "RELEASE_UINPUT_ASSET_STAGED=PASS"
           cat "$PACKAGE_DIR/SHA256SUMS"
       - name: Prepare signing key and build number
@@ -185,10 +196,16 @@ jobs:
           EXPECTED="$(awk '{print $1}' build/uinput-enter-hold-package/SHA256SUMS)"
           APK="app/build/outputs/apk/release/app-release.apk"
           ENTRY="assets/uinput/armeabi-v7a/uinput_enter_hold_probe"
+          MANIFEST_ENTRY="assets/uinput/armeabi-v7a/uinput_enter_hold_probe.sha256"
+          EXPECTED_MANIFEST="$(cat build/uinput-enter-hold-package/SHA256SUMS)"
           test -s "$APK"
           ACTUAL="$(unzip -p "$APK" "$ENTRY" | sha256sum | awk '{print $1}')"
           test -n "$ACTUAL"
           test "$ACTUAL" = "$EXPECTED"
+          MANIFEST="$(unzip -p "$APK" "$MANIFEST_ENTRY")"
+          test -n "$MANIFEST"
+          test "$MANIFEST" = "$EXPECTED_MANIFEST"
+          echo "SIGNED_RELEASE_MANIFEST_VERIFY=PASS"
           echo "SIGNED_RELEASE_ASSET_VERIFY=PASS SHA256=$ACTUAL"
       - name: Remove signing key from runner
         if: always()
