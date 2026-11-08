@@ -84,7 +84,9 @@ jobs:
           chmod 0644 "$OUT/uinput_enter_hold_probe"
           (cd "$OUT" && sha256sum uinput_enter_hold_probe > SHA256SUMS)
           install -m 0644 "$OUT/uinput_enter_hold_probe" "$ASSET"
+          install -m 0644 "$OUT/SHA256SUMS" "$ASSET_DIR/uinput_enter_hold_probe.sha256"
           cmp "$OUT/uinput_enter_hold_probe" "$ASSET"
+          cmp "$OUT/SHA256SUMS" "$ASSET_DIR/uinput_enter_hold_probe.sha256"
           echo "UINPUT_TARGET_ABI=armeabi-v7a"
           echo "UINPUT_ANDROID_API=26"
           echo "UINPUT_ASSET_STAGED=PASS"
