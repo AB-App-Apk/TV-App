@@ -33,8 +33,9 @@ internal object UinputEnterHold {
     private const val KILL_GRACE_MS = 250L
 
     /**
-     * Once a started native execution has an ambiguous outcome, quarantine further native dispatch
-     * for this process lifetime. This prevents a later press from overlapping an orphaned su child.
+     * A durable marker survives app-process death. It is created before root launch and removed
+     * only after a fully audited successful exit, preventing a restarted app from overlapping an
+     * orphaned su/native child after a crash or timeout.
      */
     @Volatile
     private var nativeDispatchQuarantined = false
@@ -59,9 +60,29 @@ internal object UinputEnterHold {
         val appContext = context.applicationContext
         val executable = installAndVerify(appContext) ?: return Result.UNAVAILABLE
         val outputFile = File(appContext.noBackupFilesDir, "$BINARY_NAME.output")
+        val quarantineFile = File(appContext.noBackupFilesDir, "$BINARY_NAME.quarantine")
 
-        // A ProcessBuilder.start() failure proves that no native process was created, so fallback
-        // remains safe. After start succeeds, every ambiguous outcome is UNCERTAIN.
+        if (nativeDispatchQuarantined || quarantineFile.exists()) {
+            nativeDispatchQuarantined = true
+            Log.e(TAG, "durable native dispatch quarantine exists; refusing another root launch")
+            return Result.UNCERTAIN
+        }
+
+        // Persist quarantine before starting su. If the app dies between this point and audited
+        // completion, a restarted app cannot issue a second potentially overlapping key sequence.
+        try {
+            FileOutputStream(quarantineFile).use { marker ->
+                marker.write("NATIVE_DISPATCH_IN_PROGRESS".toByteArray(Charsets.UTF_8))
+                marker.fd.sync()
+            }
+        } catch (e: Exception) {
+            nativeDispatchQuarantined = true
+            Log.e(TAG, "could not persist native dispatch quarantine; refusing root launch", e)
+            return Result.UNCERTAIN
+        }
+
+        // A start failure is the only post-staging condition that proves native execution did not
+        // begin. Remove the durable marker before allowing accessibility fallback.
         val process = try {
             ProcessBuilder(
                 "su", "0", "sh", "-c", "exec \"\$1\"", "tvdash-uinput", executable.absolutePath
@@ -70,8 +91,10 @@ internal object UinputEnterHold {
                 .redirectOutput(outputFile)
                 .start()
         } catch (e: Exception) {
-            Log.w(TAG, "native process could not be started; no key event was dispatched", e)
-            return Result.UNAVAILABLE
+            val markerRemoved = runCatching { quarantineFile.delete() }.getOrDefault(false)
+            nativeDispatchQuarantined = !markerRemoved
+            Log.w(TAG, "native process could not be started; quarantineRemoved=$markerRemoved", e)
+            return if (markerRemoved) Result.UNAVAILABLE else Result.UNCERTAIN
         }
 
         try {
@@ -95,9 +118,16 @@ internal object UinputEnterHold {
 
             logNativeOutput(output)
             val result = auditResult(exitCode, output)
-            if (result == Result.UNCERTAIN) {
+            if (result == Result.SENT) {
+                val markerRemoved = runCatching { quarantineFile.delete() }.getOrDefault(false)
+                if (!markerRemoved) {
+                    nativeDispatchQuarantined = true
+                    Log.e(TAG, "successful native sequence but quarantine marker removal failed; result=UNCERTAIN")
+                    return Result.UNCERTAIN
+                }
+            } else {
                 nativeDispatchQuarantined = true
-                Log.e(TAG, "native process outcome failed lifecycle audit; dispatch quarantined")
+                Log.e(TAG, "native process outcome failed lifecycle audit; durable dispatch quarantine retained")
             }
             Log.i(TAG, "dispatch result=$result exitCode=$exitCode")
             return result
@@ -233,27 +263,11 @@ internal object UinputEnterHold {
     }
 
     /**
-     * UNAVAILABLE is permitted only with a complete, normally-terminated native log that explicitly
-     * reports failure before KEY_DOWN_BEGIN. Missing telemetry, a zero exit without the full success
-     * sequence, or any marker at/after KEY_DOWN_BEGIN is UNCERTAIN.
+     * After root launch, telemetry cannot prove that a missing KEY_DOWN marker was never emitted:
+     * stdout itself may be truncated or lost. Therefore only the complete success sequence is SENT;
+     * every other completed native execution is UNCERTAIN and retains durable quarantine.
      */
     private fun auditResult(exitCode: Int, output: String): Result {
-        val keyDownStarted = output.contains("STATE=KEY_DOWN_BEGIN")
-        val keyDownAccepted = output.contains("STATE=KEY_DOWN_ACCEPTED")
-        val preKeyDownFailure =
-            exitCode != 0 &&
-                output.contains("STATE=UINPUT_ENTER_HOLD_FAIL") &&
-                !keyDownStarted &&
-                !keyDownAccepted &&
-                !output.contains("HOLD_COMPLETE") &&
-                !output.contains("STATE=KEY_UP_BEGIN") &&
-                !output.contains("STATE=KEY_UP_ACCEPTED")
-
-        if (preKeyDownFailure) {
-            Log.w(TAG, "native executable explicitly failed before KEY_DOWN; fallback is safe")
-            return Result.UNAVAILABLE
-        }
-
         val requiredStates = listOf(
             "STATE=UINPUT_OPEN",
             "STATE=DEVICE_CREATED",
