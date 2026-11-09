@@ -91,6 +91,41 @@ jobs:
           echo "UINPUT_ANDROID_API=26"
           echo "UINPUT_ASSET_STAGED=PASS"
           cat "$OUT/SHA256SUMS"
+
+          PROD_SOURCE="tools/uinput-probe/uinput_enter_hold.c"
+          PROD_OUT="build/uinput-enter-hold-production"
+          PROD_ASSET="$ASSET_DIR/uinput_enter_hold"
+          test -s "$PROD_SOURCE"
+          mkdir -p "$PROD_OUT"
+          python3 - <<'PY'
+          from pathlib import Path
+          source = Path("tools/uinput-probe/uinput_enter_hold.c").read_text()
+          required = ["KEY_ENTER", "EV_KEY", "EV_SYN", "SYN_REPORT",
+                      "CLOCK_MONOTONIC", "HOLD_DURATION_MS 1200",
+                      "UI_DEV_CREATE", "UI_DEV_DESTROY", "CLEANUP_KEY_UP_BEGIN"]
+          forbidden = ["KEY_DPAD_CENTER", "BTN_TOUCH", "EV_ABS", "EV_REL"]
+          for token in required:
+              if token not in source:
+                  raise SystemExit(f"::error::Production source missing {token}")
+          for token in forbidden:
+              if token in source:
+                  raise SystemExit(f"::error::Production source contains forbidden token {token}")
+          if source.count("write(g_fd, events, sizeof(events))") != 1:
+              raise SystemExit("::error::Expected exactly one production event write site")
+          print("UINPUT_PRODUCTION_SOURCE_AUDIT=PASS")
+          PY
+          "$COMPILER" -std=c11 -O2 -Wall -Wextra -Werror -fPIE -pie "$PROD_SOURCE" -o "$PROD_OUT/uinput_enter_hold"
+          "$READELF" -h -l -d "$PROD_OUT/uinput_enter_hold" | tee "$PROD_OUT/elf-inspection.txt"
+          grep -q 'Class:.*ELF32' "$PROD_OUT/elf-inspection.txt"
+          grep -q 'Data:.*little endian' "$PROD_OUT/elf-inspection.txt"
+          grep -q 'Machine:.*ARM' "$PROD_OUT/elf-inspection.txt"
+          grep -q 'Type:.*DYN' "$PROD_OUT/elf-inspection.txt"
+          grep -Fq '/system/bin/linker' "$PROD_OUT/elf-inspection.txt"
+          chmod 0644 "$PROD_OUT/uinput_enter_hold"
+          (cd "$PROD_OUT" && sha256sum uinput_enter_hold > SHA256SUMS)
+          echo "UINPUT_PRODUCTION_TARGET_ABI=armeabi-v7a"
+          echo "UINPUT_PRODUCTION_ASSET_STAGED=PASS"
+          cat "$PROD_OUT/SHA256SUMS"
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: 8.9
