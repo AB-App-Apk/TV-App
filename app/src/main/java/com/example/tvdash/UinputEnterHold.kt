@@ -58,15 +58,15 @@ internal object UinputEnterHold {
         }
 
         val appContext = context.applicationContext
-        val executable = installAndVerify(appContext) ?: return Result.UNAVAILABLE
-        val outputFile = File(appContext.noBackupFilesDir, "$BINARY_NAME.output")
         val quarantineFile = File(appContext.noBackupFilesDir, "$BINARY_NAME.quarantine")
-
         if (nativeDispatchQuarantined || quarantineFile.exists()) {
             nativeDispatchQuarantined = true
             Log.e(TAG, "durable native dispatch quarantine exists; refusing another root launch")
             return Result.UNCERTAIN
         }
+
+        val executable = installAndVerify(appContext) ?: return Result.UNAVAILABLE
+        val outputFile = File(appContext.noBackupFilesDir, "$BINARY_NAME.output")
 
         // Persist quarantine before starting su. If the app dies between this point and audited
         // completion, a restarted app cannot issue a second potentially overlapping key sequence.
