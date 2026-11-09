@@ -123,6 +123,10 @@ jobs:
           grep -Fq '/system/bin/linker' "$PROD_OUT/elf-inspection.txt"
           chmod 0644 "$PROD_OUT/uinput_enter_hold"
           (cd "$PROD_OUT" && sha256sum uinput_enter_hold > SHA256SUMS)
+          install -m 0644 "$PROD_OUT/uinput_enter_hold" "$PROD_ASSET"
+          install -m 0644 "$PROD_OUT/SHA256SUMS" "$PROD_ASSET.sha256"
+          cmp "$PROD_OUT/uinput_enter_hold" "$PROD_ASSET"
+          cmp "$PROD_OUT/SHA256SUMS" "$PROD_ASSET.sha256"
           echo "UINPUT_PRODUCTION_TARGET_ABI=armeabi-v7a"
           echo "UINPUT_PRODUCTION_ASSET_STAGED=PASS"
           cat "$PROD_OUT/SHA256SUMS"
