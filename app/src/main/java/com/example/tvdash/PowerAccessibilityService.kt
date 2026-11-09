@@ -11,7 +11,6 @@ import android.os.SystemClock
 import android.util.Log
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
-import java.util.concurrent.TimeUnit
 
 /**
  * The remote's hands: D-pad, Back, sleep and typing into text boxes.
@@ -141,23 +140,25 @@ class PowerAccessibilityService : AccessibilityService() {
     }
 
     /**
-     * Long OK is a D-pad key hold, not a touch gesture. On this rooted TV build, Android's input
-     * shell injects KEYCODE_DPAD_CENTER with FLAG_LONG_PRESS and the matching key-up. If root
-     * injection is unavailable, use the focused node's non-touch ACTION_LONG_CLICK instead.
+     * YouTube Long OK uses the validated native uinput KEY_ENTER hold. A fallback is allowed only
+     * when staging/root launch fails before the native process can begin a key transition. Once
+     * KEY_DOWN may have been emitted, an uncertain result is terminal to prevent double dispatch.
      */
     internal fun performLongOkResult(): DiscretePressResult {
         val activePackage = activeWindowPackageName()
         if (activePackage in YOUTUBE_PACKAGES) {
-            Log.i(TAG, "long-ok route=youtube-native-dpad package=$activePackage")
-            return when (dispatchRootDpadCenterLongPress()) {
-                RootInputResult.SENT -> DiscretePressResult.SUCCESS
-                RootInputResult.UNAVAILABLE -> performFocusedAccessibilityLongClickResult()
-                // The command may have dispatched before timing out. Do not try a second action.
-                RootInputResult.UNCERTAIN -> DiscretePressResult.ACTION_FAILED
+            Log.i(TAG, "long-ok route=uinput-key-enter package=$activePackage")
+            return when (UinputEnterHold.dispatch(this)) {
+                UinputEnterHold.Result.SENT -> DiscretePressResult.SUCCESS
+                UinputEnterHold.Result.UNAVAILABLE -> performFocusedAccessibilityLongClickResult()
+                UinputEnterHold.Result.UNCERTAIN -> {
+                    Log.e(TAG, "long-ok uinput result uncertain; refusing fallback to prevent duplicate action")
+                    DiscretePressResult.ACTION_FAILED
+                }
             }
         }
 
-        // The reported failure is YouTube-only. Preserve ordinary app behavior without using touch.
+        // Preserve ordinary app behavior without using touch.
         Log.i(TAG, "long-ok route=accessibility package=${activePackage ?: "unknown"}")
         return performFocusedAccessibilityLongClickResult()
     }
@@ -180,39 +181,6 @@ class PowerAccessibilityService : AccessibilityService() {
     /** Legacy Boolean API retained for any older caller. */
     fun performFocusedLongClick(): Boolean =
         performLongOkResult() == DiscretePressResult.SUCCESS
-
-    private enum class RootInputResult { SENT, UNAVAILABLE, UNCERTAIN }
-
-    /**
-     * Uses the firmware's root shell to inject a genuine non-touch D-pad-center long press.
-     * The command is fixed (no user-controlled shell text) and bounded to avoid wedging a worker.
-     */
-    private fun dispatchRootDpadCenterLongPress(): RootInputResult {
-        var process: Process? = null
-        return try {
-            process = ProcessBuilder(
-                "su", "0", "sh", "-c",
-                "input dpad keyevent --longpress KEYCODE_DPAD_CENTER"
-            ).redirectErrorStream(true).start()
-            process.outputStream.close()
-
-            if (!process.waitFor(3L, TimeUnit.SECONDS)) {
-                process.destroyForcibly()
-                Log.w(TAG, "long-ok root key injection timed out; refusing a second dispatch")
-                RootInputResult.UNCERTAIN
-            } else {
-                val output = process.inputStream.bufferedReader().use { it.readText().trim() }
-                val exitCode = process.exitValue()
-                Log.i(TAG, "long-ok root key injection exitCode=$exitCode output=${output.take(160)}")
-                if (exitCode == 0) RootInputResult.SENT else RootInputResult.UNAVAILABLE
-            }
-        } catch (t: Throwable) {
-            Log.w(TAG, "long-ok root key injection unavailable", t)
-            RootInputResult.UNAVAILABLE
-        } finally {
-            process?.let { if (it.isAlive) it.destroyForcibly() }
-        }
-    }
 
     /**
      * Non-touch fallback for devices where the root input command is unavailable. This only
