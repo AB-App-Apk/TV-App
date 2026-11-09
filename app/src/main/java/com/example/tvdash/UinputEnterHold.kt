@@ -3,6 +3,7 @@ package com.example.tvdash
 import android.content.Context
 import android.os.Build
 import android.util.Log
+import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
@@ -23,12 +24,20 @@ internal object UinputEnterHold {
     private const val BINARY_ASSET = "$ASSET_DIR/$BINARY_NAME"
     private const val MANIFEST_ASSET = "$BINARY_ASSET.sha256"
     private const val EXPECTED_HOLD_MS = 1_200L
+    private const val MAX_NATIVE_OUTPUT_BYTES = 32 * 1024
 
-    // Native sequence: 1,200 ms device-ready delay + 1,200 ms key hold + 150 ms release settle.
-    // Keep the process deadline below TvLink's 4,000 ms response-read timeout.
-    private const val PROCESS_TIMEOUT_MS = 3_200L
-    private const val TERM_GRACE_MS = 350L
+    // Native sequence is nominally 1,200 ms ready + 1,200 ms hold + 150 ms settle = 2,550 ms.
+    // Leave termination headroom inside TvLink's 4,000 ms response-read timeout.
+    private const val PROCESS_TIMEOUT_MS = 2_900L
+    private const val TERM_GRACE_MS = 250L
     private const val KILL_GRACE_MS = 250L
+
+    /**
+     * Once a started native execution has an ambiguous outcome, quarantine further native dispatch
+     * for this process lifetime. This prevents a later press from overlapping an orphaned su child.
+     */
+    @Volatile
+    private var nativeDispatchQuarantined = false
 
     internal enum class Result {
         SENT,
@@ -42,50 +51,87 @@ internal object UinputEnterHold {
      */
     @Synchronized
     fun dispatch(context: Context): Result {
-        val executable = installAndVerify(context.applicationContext) ?: return Result.UNAVAILABLE
-        var process: Process? = null
+        if (nativeDispatchQuarantined) {
+            Log.e(TAG, "native dispatch quarantined after a previous uncertain process outcome")
+            return Result.UNCERTAIN
+        }
+
+        val appContext = context.applicationContext
+        val executable = installAndVerify(appContext) ?: return Result.UNAVAILABLE
+        val outputFile = File(appContext.noBackupFilesDir, "$BINARY_NAME.output")
+
+        // A ProcessBuilder.start() failure proves that no native process was created, so fallback
+        // remains safe. After start succeeds, every ambiguous outcome is UNCERTAIN.
+        val process = try {
+            ProcessBuilder(
+                "su", "0", "sh", "-c", "exec \"\$1\"", "tvdash-uinput", executable.absolutePath
+            )
+                .redirectErrorStream(true)
+                .redirectOutput(outputFile)
+                .start()
+        } catch (e: Exception) {
+            Log.w(TAG, "native process could not be started; no key event was dispatched", e)
+            return Result.UNAVAILABLE
+        }
 
         try {
-            // The path is passed as a positional argument, not interpolated into shell source.
-            process = ProcessBuilder(
-                "su", "0", "sh", "-c", "exec \"\$1\"", "tvdash-uinput", executable.absolutePath
-            ).redirectErrorStream(true).start()
-
             if (!process.waitFor(PROCESS_TIMEOUT_MS, TimeUnit.MILLISECONDS)) {
-                Log.w(TAG, "native process timeout after ${PROCESS_TIMEOUT_MS}ms")
-                val output = terminateAndRead(process)
-                logNativeOutput(output)
-                return if (output.contains("STATE=KEY_DOWN_BEGIN")) Result.UNCERTAIN else Result.UNAVAILABLE
+                val terminated = terminateProcess(process)
+                nativeDispatchQuarantined = true
+                Log.e(
+                    TAG,
+                    "native process timed out; result=UNCERTAIN terminationConfirmed=$terminated; fallback prohibited"
+                )
+                return Result.UNCERTAIN
             }
 
             val exitCode = process.exitValue()
-            val output = process.inputStream.bufferedReader(Charsets.UTF_8).use { it.readText() }
+            val output = readNativeOutput(outputFile)
+            if (output == null) {
+                nativeDispatchQuarantined = true
+                Log.e(TAG, "native process exited but telemetry was missing or incomplete; result=UNCERTAIN")
+                return Result.UNCERTAIN
+            }
+
             logNativeOutput(output)
             val result = auditResult(exitCode, output)
+            if (result == Result.UNCERTAIN) {
+                nativeDispatchQuarantined = true
+                Log.e(TAG, "native process outcome failed lifecycle audit; dispatch quarantined")
+            }
             Log.i(TAG, "dispatch result=$result exitCode=$exitCode")
             return result
         } catch (e: InterruptedException) {
+            val terminated = terminateProcess(process)
+            nativeDispatchQuarantined = true
             Thread.currentThread().interrupt()
-            val output = process?.let { terminateAndRead(it) }.orEmpty()
-            logNativeOutput(output)
-            Log.w(TAG, "native process wait interrupted", e)
-            return if (output.contains("STATE=KEY_DOWN_BEGIN")) Result.UNCERTAIN else Result.UNAVAILABLE
+            Log.w(
+                TAG,
+                "native process wait interrupted; result=UNCERTAIN terminationConfirmed=$terminated; fallback prohibited",
+                e
+            )
+            return Result.UNCERTAIN
         } catch (e: Exception) {
-            val output = process?.let { terminateAndRead(it) }.orEmpty()
-            logNativeOutput(output)
-            Log.w(TAG, "native uinput dispatch failed", e)
-            return if (output.contains("STATE=KEY_DOWN_BEGIN")) Result.UNCERTAIN else Result.UNAVAILABLE
+            val terminated = terminateProcess(process)
+            nativeDispatchQuarantined = true
+            Log.w(
+                TAG,
+                "native process started but dispatch/telemetry failed; result=UNCERTAIN terminationConfirmed=$terminated",
+                e
+            )
+            return Result.UNCERTAIN
         } finally {
-            process?.let {
-                if (it.isAlive) {
-                    it.destroy()
-                    if (!runCatching { it.waitFor(TERM_GRACE_MS, TimeUnit.MILLISECONDS) }.getOrDefault(false)) {
-                        it.destroyForcibly()
-                    }
-                }
-                runCatching { it.inputStream.close() }
-                runCatching { it.errorStream.close() }
-                runCatching { it.outputStream.close() }
+            // Defensive final guard: never let a live Process object escape dispatch silently.
+            if (process.isAlive) {
+                nativeDispatchQuarantined = true
+                val terminated = terminateProcess(process)
+                Log.e(TAG, "final process guard terminationConfirmed=$terminated")
+            }
+            runCatching { process.inputStream.close() }
+            runCatching { process.errorStream.close() }
+            runCatching { process.outputStream.close() }
+            if (outputFile.exists() && !outputFile.delete()) {
+                Log.w(TAG, "could not delete temporary native telemetry file")
             }
         }
     }
@@ -186,12 +232,33 @@ internal object UinputEnterHold {
         }
     }
 
+    /**
+     * UNAVAILABLE is permitted only with a complete, normally-terminated native log that explicitly
+     * reports failure before KEY_DOWN_BEGIN. Missing telemetry, a zero exit without the full success
+     * sequence, or any marker at/after KEY_DOWN_BEGIN is UNCERTAIN.
+     */
     private fun auditResult(exitCode: Int, output: String): Result {
-        // The native program flushes KEY_DOWN_BEGIN before its first event write.
-        if (!output.contains("STATE=KEY_DOWN_BEGIN")) return Result.UNAVAILABLE
+        val keyDownStarted = output.contains("STATE=KEY_DOWN_BEGIN")
+        val keyDownAccepted = output.contains("STATE=KEY_DOWN_ACCEPTED")
+        val preKeyDownFailure =
+            exitCode != 0 &&
+                output.contains("STATE=UINPUT_ENTER_HOLD_FAIL") &&
+                !keyDownStarted &&
+                !keyDownAccepted &&
+                !output.contains("HOLD_COMPLETE") &&
+                !output.contains("STATE=KEY_UP_BEGIN") &&
+                !output.contains("STATE=KEY_UP_ACCEPTED")
+
+        if (preKeyDownFailure) {
+            Log.w(TAG, "native executable explicitly failed before KEY_DOWN; fallback is safe")
+            return Result.UNAVAILABLE
+        }
 
         val requiredStates = listOf(
+            "STATE=UINPUT_OPEN",
             "STATE=DEVICE_CREATED",
+            "STATE=DEVICE_READY",
+            "STATE=KEY_DOWN_BEGIN",
             "STATE=KEY_DOWN_ACCEPTED",
             "STATE=KEY_UP_BEGIN",
             "STATE=KEY_UP_ACCEPTED",
@@ -214,35 +281,61 @@ internal object UinputEnterHold {
         }
     }
 
-    /** TERM lets the native signal handler emit KEY_UP and destroy uinput before forced termination. */
-    private fun terminateAndRead(process: Process): String {
-        if (process.isAlive) {
-            process.destroy()
-            val terminated = try {
-                process.waitFor(TERM_GRACE_MS, TimeUnit.MILLISECONDS)
-            } catch (e: InterruptedException) {
-                Thread.currentThread().interrupt()
-                false
-            }
-            if (!terminated && process.isAlive) {
-                process.destroyForcibly()
-                try {
-                    process.waitFor(KILL_GRACE_MS, TimeUnit.MILLISECONDS)
-                } catch (e: InterruptedException) {
-                    Thread.currentThread().interrupt()
+    /**
+     * Best-effort TERM followed by KILL. The return value confirms only that this Process exited;
+     * callers still treat a timed-out or interrupted input attempt as UNCERTAIN.
+     */
+    private fun terminateProcess(process: Process): Boolean {
+        if (!process.isAlive) return true
+
+        runCatching { process.destroy() }
+            .onFailure { Log.w(TAG, "TERM request failed", it) }
+        var terminated = waitForExit(process, TERM_GRACE_MS)
+
+        if (!terminated && process.isAlive) {
+            runCatching { process.destroyForcibly() }
+                .onFailure { Log.e(TAG, "KILL request failed", it) }
+            terminated = waitForExit(process, KILL_GRACE_MS)
+        }
+
+        val confirmed = terminated || !process.isAlive
+        if (!confirmed) {
+            Log.e(TAG, "native Process remains alive after TERM and KILL requests")
+        }
+        return confirmed
+    }
+
+    private fun waitForExit(process: Process, timeoutMs: Long): Boolean {
+        return try {
+            process.waitFor(timeoutMs, TimeUnit.MILLISECONDS)
+        } catch (e: InterruptedException) {
+            Thread.currentThread().interrupt()
+            false
+        } catch (e: Exception) {
+            Log.w(TAG, "process termination wait failed", e)
+            false
+        }
+    }
+
+    /** Read redirected telemetry with a hard size cap; never wait on a process-owned output pipe. */
+    private fun readNativeOutput(file: File): String? {
+        return try {
+            if (!file.isFile || file.length() > MAX_NATIVE_OUTPUT_BYTES) return null
+            val output = ByteArrayOutputStream()
+            FileInputStream(file).use { input ->
+                val buffer = ByteArray(4_096)
+                while (true) {
+                    val count = input.read(buffer)
+                    if (count < 0) break
+                    if (count == 0) continue
+                    if (output.size() + count > MAX_NATIVE_OUTPUT_BYTES) return null
+                    output.write(buffer, 0, count)
                 }
             }
-        }
-        return if (process.isAlive) {
-            Log.e(TAG, "native process remained alive after termination request")
-            ""
-        } else {
-            runCatching {
-                process.inputStream.bufferedReader(Charsets.UTF_8).use { it.readText() }
-            }.getOrElse {
-                Log.w(TAG, "could not read native process telemetry", it)
-                ""
-            }
+            String(output.toByteArray(), Charsets.UTF_8)
+        } catch (e: Exception) {
+            Log.w(TAG, "could not read native process telemetry", e)
+            null
         }
     }
 
