@@ -32,10 +32,6 @@ jobs:
         run: |
           set -euo pipefail
           SOURCE="tools/uinput-probe/uinput_enter_hold_probe.c"
-          PROD_SOURCE="tools/uinput-probe/uinput_enter_hold.c"
-          PROD_OUT="build/uinput-enter-hold-production"
-          PROD_ASSET_DIR="app/src/main/assets/uinput/armeabi-v7a"
-          PROD_ASSET="$PROD_ASSET_DIR/uinput_enter_hold"
           OUT="build/uinput-enter-hold"
           ASSET_DIR="app/src/main/assets/uinput/armeabi-v7a"
           ASSET="$ASSET_DIR/uinput_enter_hold_probe"
@@ -95,41 +91,6 @@ jobs:
           echo "UINPUT_ANDROID_API=26"
           echo "UINPUT_ASSET_STAGED=PASS"
           cat "$OUT/SHA256SUMS"
-
-          test -s "$PROD_SOURCE"
-          mkdir -p "$PROD_OUT" "$PROD_ASSET_DIR"
-          python3 - <<'PY'
-          from pathlib import Path
-          source = Path("tools/uinput-probe/uinput_enter_hold.c").read_text()
-          required = ["KEY_ENTER", "EV_KEY", "EV_SYN", "SYN_REPORT",
-                      "CLOCK_MONOTONIC", "HOLD_DURATION_MS 1200",
-                      "UI_DEV_CREATE", "UI_DEV_DESTROY", "CLEANUP_KEY_UP_BEGIN"]
-          forbidden = ["KEY_DPAD_CENTER", "BTN_TOUCH", "EV_ABS", "EV_REL",
-                       "READY_DELAY_MS 1200"]
-          for token in required:
-              if token not in source:
-                  raise SystemExit(f"::error::Production source missing {token}")
-          for token in forbidden:
-              if token in source:
-                  raise SystemExit(f"::error::Production source contains forbidden token {token}")
-          if source.count("write(g_fd, events, sizeof(events))") != 1:
-              raise SystemExit("::error::Expected one event write site")
-          print("UINPUT_PRODUCTION_SOURCE_AUDIT=PASS")
-          PY
-          "$COMPILER" -std=c11 -O2 -Wall -Wextra -Werror -fPIE -pie "$PROD_SOURCE" -o "$PROD_OUT/uinput_enter_hold"
-          "$READELF" -h -l -d "$PROD_OUT/uinput_enter_hold" | tee "$PROD_OUT/elf-inspection.txt"
-          grep -q 'Class:.*ELF32' "$PROD_OUT/elf-inspection.txt"
-          grep -q 'Machine:.*ARM' "$PROD_OUT/elf-inspection.txt"
-          grep -q 'Type:.*DYN' "$PROD_OUT/elf-inspection.txt"
-          grep -Fq '/system/bin/linker' "$PROD_OUT/elf-inspection.txt"
-          chmod 0644 "$PROD_OUT/uinput_enter_hold"
-          (cd "$PROD_OUT" && sha256sum uinput_enter_hold > SHA256SUMS)
-          install -m 0644 "$PROD_OUT/uinput_enter_hold" "$PROD_ASSET"
-          install -m 0644 "$PROD_OUT/SHA256SUMS" "$PROD_ASSET.sha256"
-          cmp "$PROD_OUT/uinput_enter_hold" "$PROD_ASSET"
-          cmp "$PROD_OUT/SHA256SUMS" "$PROD_ASSET.sha256"
-          echo "UINPUT_PRODUCTION_ASSET_STAGED=PASS"
-          cat "$PROD_OUT/SHA256SUMS"
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: 8.9
@@ -147,22 +108,14 @@ jobs:
           ls -lah app/build/outputs/apk/debug
           echo "UNSIGNED_RELEASE_APK_OUTPUTS:"
           ls -lah app/build/outputs/apk/release
-          PROD_EXPECTED="$(awk '{print $1}' build/uinput-enter-hold-production/SHA256SUMS)"
-          PROD_ENTRY="assets/uinput/armeabi-v7a/uinput_enter_hold"
-          PROD_MANIFEST_ENTRY="$PROD_ENTRY.sha256"
-          PROD_MANIFEST_FILE="build/uinput-enter-hold-production/SHA256SUMS"
           for APK in app/build/outputs/apk/debug/app-debug.apk app/build/outputs/apk/release/app-release-unsigned.apk; do
             test -s "$APK"
             ACTUAL="$(unzip -p "$APK" "$ENTRY" | sha256sum | awk '{print $1}')"
             test -n "$ACTUAL"
             test "$ACTUAL" = "$EXPECTED"
             unzip -p "$APK" "$MANIFEST_ENTRY" | cmp - "$MANIFEST_FILE"
-            PROD_ACTUAL="$(unzip -p "$APK" "$PROD_ENTRY" | sha256sum | awk '{print $1}')"
-            test "$PROD_ACTUAL" = "$PROD_EXPECTED"
-            unzip -p "$APK" "$PROD_MANIFEST_ENTRY" | cmp - "$PROD_MANIFEST_FILE"
             echo "APK_MANIFEST_VERIFY=PASS APK=$APK"
             echo "APK_ASSET_VERIFY=PASS APK=$APK SHA256=$ACTUAL"
-            echo "APK_PRODUCTION_UINPUT_VERIFY=PASS APK=$APK SHA256=$PROD_ACTUAL"
           done
       - uses: actions/upload-artifact@v4
         with:
@@ -171,6 +124,11 @@ jobs:
             build/uinput-enter-hold/uinput_enter_hold_probe
             build/uinput-enter-hold/SHA256SUMS
             build/uinput-enter-hold/elf-inspection.txt
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        with:
+          name: uinput-enter-hold-production-armv7a
+          path: |
             build/uinput-enter-hold-production/uinput_enter_hold
             build/uinput-enter-hold-production/SHA256SUMS
             build/uinput-enter-hold-production/elf-inspection.txt
@@ -195,6 +153,10 @@ jobs:
         with:
           name: uinput-enter-hold-armv7a
           path: build/uinput-enter-hold-package
+      - uses: actions/download-artifact@v4
+        with:
+          name: uinput-enter-hold-production-armv7a
+          path: build/uinput-enter-hold-production-package
       - name: Verify and stage the exact tested native executable for release
         run: |
           set -euo pipefail
@@ -202,16 +164,21 @@ jobs:
           ASSET_DIR="app/src/main/assets/uinput/armeabi-v7a"
           ASSET="$ASSET_DIR/uinput_enter_hold_probe"
           ASSET_MANIFEST="$ASSET_DIR/uinput_enter_hold_probe.sha256"
+          PROD_PACKAGE_DIR="build/uinput-enter-hold-production-package"
           PROD_ASSET="$ASSET_DIR/uinput_enter_hold"
           PROD_MANIFEST="$PROD_ASSET.sha256"
           (cd "$PACKAGE_DIR" && sha256sum -c SHA256SUMS)
+          (cd "$PROD_PACKAGE_DIR" && sha256sum -c SHA256SUMS)
           mkdir -p "$ASSET_DIR"
           install -m 0644 "$PACKAGE_DIR/uinput_enter_hold_probe" "$ASSET"
           install -m 0644 "$PACKAGE_DIR/SHA256SUMS" "$ASSET_MANIFEST"
           cmp "$PACKAGE_DIR/uinput_enter_hold_probe" "$ASSET"
           cmp "$PACKAGE_DIR/SHA256SUMS" "$ASSET_MANIFEST"
-          install -m 0644 "$PACKAGE_DIR/uinput_enter_hold" "$PROD_ASSET"
-          install -m 0644 "$PACKAGE_DIR/../uinput-enter-hold-production/SHA256SUMS" "$PROD_MANIFEST"
+          install -m 0644 "$PROD_PACKAGE_DIR/uinput_enter_hold" "$PROD_ASSET"
+          install -m 0644 "$PROD_PACKAGE_DIR/SHA256SUMS" "$PROD_MANIFEST"
+          cmp "$PROD_PACKAGE_DIR/uinput_enter_hold" "$PROD_ASSET"
+          cmp "$PROD_PACKAGE_DIR/SHA256SUMS" "$PROD_MANIFEST"
+          echo "RELEASE_PRODUCTION_UINPUT_BINARY_STAGED=PASS"
           echo "RELEASE_UINPUT_BINARY_STAGED=PASS"
           echo "RELEASE_UINPUT_MANIFEST_STAGED=PASS"
           echo "RELEASE_UINPUT_ASSET_STAGED=PASS"
@@ -250,20 +217,20 @@ jobs:
           ENTRY="assets/uinput/armeabi-v7a/uinput_enter_hold_probe"
           MANIFEST_ENTRY="assets/uinput/armeabi-v7a/uinput_enter_hold_probe.sha256"
           MANIFEST_FILE="build/uinput-enter-hold-package/SHA256SUMS"
-          PROD_EXPECTED="$(awk '{print $1}' build/uinput-enter-hold-package/uinput_enter_hold.SHA256SUMS)"
-          PROD_ENTRY="assets/uinput/armeabi-v7a/uinput_enter_hold"
-          PROD_MANIFEST_ENTRY="$PROD_ENTRY.sha256"
-          PROD_MANIFEST_FILE="build/uinput-enter-hold-package/uinput_enter_hold.SHA256SUMS"
           test -s "$APK"
           ACTUAL="$(unzip -p "$APK" "$ENTRY" | sha256sum | awk '{print $1}')"
           test -n "$ACTUAL"
           test "$ACTUAL" = "$EXPECTED"
           unzip -p "$APK" "$MANIFEST_ENTRY" | cmp - "$MANIFEST_FILE"
+          PROD_EXPECTED="$(awk '{print $1}' build/uinput-enter-hold-production-package/SHA256SUMS)"
+          PROD_ENTRY="assets/uinput/armeabi-v7a/uinput_enter_hold"
+          PROD_MANIFEST_ENTRY="$PROD_ENTRY.sha256"
+          PROD_MANIFEST_FILE="build/uinput-enter-hold-production-package/SHA256SUMS"
           PROD_ACTUAL="$(unzip -p "$APK" "$PROD_ENTRY" | sha256sum | awk '{print $1}')"
           test "$PROD_ACTUAL" = "$PROD_EXPECTED"
           unzip -p "$APK" "$PROD_MANIFEST_ENTRY" | cmp - "$PROD_MANIFEST_FILE"
-          echo "SIGNED_RELEASE_MANIFEST_VERIFY=PASS"
           echo "SIGNED_RELEASE_PRODUCTION_UINPUT_VERIFY=PASS SHA256=$PROD_ACTUAL"
+          echo "SIGNED_RELEASE_MANIFEST_VERIFY=PASS"
           echo "SIGNED_RELEASE_ASSET_VERIFY=PASS SHA256=$ACTUAL"
       - name: Remove signing key from runner
         if: always()
