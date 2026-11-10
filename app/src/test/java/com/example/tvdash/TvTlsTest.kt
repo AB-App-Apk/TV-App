@@ -122,7 +122,7 @@ class TvTlsTest {
                     System.err.println("TV_TLS_CLIENT_SUPPORTED_PROTOCOLS=${it.supportedProtocols.joinToString(",")}")
                     System.err.println("TV_TLS_CLIENT_ENABLED_PROTOCOLS=${it.enabledProtocols.joinToString(",")}")
                     java.security.Security.getProviders().forEach { provider ->
-                        System.err.println("TV_TLS_JCA_PROVIDER=${provider.name} VERSION=${provider.versionStr}")
+                        System.err.println("TV_TLS_JCA_PROVIDER=${provider.name} INFO=${provider.info}")
                     }
                     failure.printStackTrace(System.err)
                     System.err.println("TV_TLS_HANDSHAKE_FAILURE_END")
