@@ -205,14 +205,18 @@ internal class DiscretePressJournal(
         super.onConfigure(db)
         db.setForeignKeyConstraintsEnabled(true)
 
-        // Both PRAGMAs return a row. Consume their cursors; execSQL is only for statements with no result set.
+        // synchronous=FULL is a setter with no result row; execute it as a statement.
+        db.execSQL("PRAGMA synchronous=FULL")
+
+        // Verify the effective mode with the query-only form of the PRAGMA.
         // Android SQLite defaults to rollback-journal mode because WAL is never enabled for this helper.
-        val synchronous = db.rawQuery("PRAGMA synchronous=FULL", null).use { cursor ->
+        val synchronous = db.rawQuery("PRAGMA synchronous", null).use { cursor ->
             check(cursor.moveToFirst()) { "SQLite did not report its synchronous mode" }
             cursor.getInt(0)
         }
         check(synchronous == 2) { "SQLite synchronous mode is not FULL: $synchronous" }
 
+        // busy_timeout=5000 returns the applied timeout as one row, so read it from that statement.
         val busyTimeout = db.rawQuery("PRAGMA busy_timeout=5000", null).use { cursor ->
             check(cursor.moveToFirst()) { "SQLite did not report its busy timeout" }
             cursor.getInt(0)
