@@ -1,7 +1,6 @@
 package com.example.tvdash
 
 import android.content.Context
-import androidx.test.core.app.ApplicationProvider
 import com.example.tvlink.RemotePressProtocol
 import java.io.File
 import java.util.UUID
@@ -12,6 +11,7 @@ import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
+import org.robolectric.RuntimeEnvironment
 import org.robolectric.annotation.Config
 
 @RunWith(RobolectricTestRunner::class)
@@ -24,7 +24,7 @@ class DiscretePressJournalTest {
 
     @Before
     fun setUp() {
-        context = ApplicationProvider.getApplicationContext()
+        context = RuntimeEnvironment.getApplication()
         directory = File(context.cacheDir, "press-journal-test-${UUID.randomUUID()}")
         assertTrue(directory.mkdirs())
         database = File(directory, "journal.db")
