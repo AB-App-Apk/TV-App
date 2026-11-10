@@ -4,6 +4,9 @@ import android.content.Context
 import com.example.tvlink.RemotePressProtocol
 import java.io.File
 import java.util.UUID
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicReference
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -117,7 +120,45 @@ class DiscretePressJournalTest {
     }
 
     @Test
-    fun failedCompletionCommitCannotMakeRequestExecutableAgain() {
+    fun independentJournalInstancesCannotClaimTheSameRequestConcurrently() {
+        val id = UUID.randomUUID().toString()
+        val secondJournal = DiscretePressJournal(context, database.absolutePath)
+        val callbackEntered = CountDownLatch(1)
+        val releaseCallback = CountDownLatch(1)
+        val firstResult = AtomicReference<String>()
+        var firstSideEffectCount = 0
+        var secondSideEffectCount = 0
+
+        val firstThread = Thread {
+            firstResult.set(
+                journal.executeOnce(id, "ok", RemotePressProtocol.ACTION_LONG) {
+                    firstSideEffectCount++
+                    callbackEntered.countDown()
+                    check(releaseCallback.await(5, TimeUnit.SECONDS))
+                    "ok"
+                }
+            )
+        }
+        firstThread.start()
+        assertTrue("first callback did not start", callbackEntered.await(5, TimeUnit.SECONDS))
+
+        val secondResult = secondJournal.executeOnce(id, "ok", RemotePressProtocol.ACTION_LONG) {
+            secondSideEffectCount++
+            "ok"
+        }
+
+        releaseCallback.countDown()
+        firstThread.join(5_000)
+        secondJournal.close()
+
+        assertEquals("ok", firstResult.get())
+        assertEquals(RemotePressProtocol.RESULT_UNCERTAIN, secondResult)
+        assertEquals(1, firstSideEffectCount)
+        assertEquals(0, secondSideEffectCount)
+    }
+
+    @Test
+    fun completedTransitionCannotBeOverwritten() {
         val id = UUID.randomUUID().toString()
         assertEquals(
             DiscretePressJournal.Claim.Acquired,
