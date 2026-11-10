@@ -46,6 +46,9 @@ android {
     testOptions {
         unitTests.isIncludeAndroidResources = true
         unitTests.all {
+            // Conscrypt's JVM test server may inspect InetAddress.holder() during TLS accept/handshake.
+            // Open only this JDK package in the forked unit-test JVM; Android production processes are unaffected.
+            it.jvmArgs("--add-opens=java.base/java.net=ALL-UNNAMED")
             it.testLogging {
                 events("failed", "standardOut", "standardError")
                 exceptionFormat = org.gradle.api.tasks.testing.logging.TestExceptionFormat.FULL
