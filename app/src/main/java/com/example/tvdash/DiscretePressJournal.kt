@@ -2,7 +2,6 @@ package com.example.tvdash
 
 import android.content.ContentValues
 import android.content.Context
-import android.database.Cursor
 import android.database.DatabaseErrorHandler
 import android.database.sqlite.SQLiteDatabase
 import android.database.sqlite.SQLiteOpenHelper
@@ -206,7 +205,6 @@ internal class DiscretePressJournal(
         super.onConfigure(db)
         db.setForeignKeyConstraintsEnabled(true)
         // Rollback journal + FULL synchronous commit: persist each state transition before returning.
-        db.execSQL("PRAGMA journal_mode=DELETE")
         db.execSQL("PRAGMA synchronous=FULL")
         db.execSQL("PRAGMA busy_timeout=5000")
     }
