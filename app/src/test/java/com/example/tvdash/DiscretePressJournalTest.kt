@@ -1,6 +1,7 @@
 package com.example.tvdash
 
 import android.content.Context
+import android.database.sqlite.SQLiteDatabase
 import com.example.tvlink.RemotePressProtocol
 import java.io.File
 import java.util.UUID
@@ -15,6 +16,7 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
+import org.robolectric.shadows.ShadowSQLiteConnection
 import org.robolectric.annotation.Config
 
 @RunWith(RobolectricTestRunner::class)
@@ -27,6 +29,10 @@ class DiscretePressJournalTest {
 
     @Before
     fun setUp() {
+        // Match Android 14 defaults before any test database connection is opened.
+        ShadowSQLiteConnection.setDefaultJournalMode("TRUNCATE")
+        ShadowSQLiteConnection.setDefaultSyncMode("FULL")
+
         context = RuntimeEnvironment.getApplication()
         directory = File(context.cacheDir, "press-journal-test-${UUID.randomUUID()}")
         assertTrue(directory.mkdirs())
@@ -38,6 +44,44 @@ class DiscretePressJournalTest {
     fun tearDown() {
         if (::journal.isInitialized) journal.close()
         directory.deleteRecursively()
+    }
+
+
+    @Test
+    fun robolectricSqliteDefaultsAndJournalMatchAndroid14Modes() {
+        // Verify Robolectric's configured defaults independently of the app's onConfigure hook.
+        val defaultsDatabase = SQLiteDatabase.openOrCreateDatabase(
+            File(directory, "robolectric-defaults.db"),
+            null
+        )
+        try {
+            val defaultJournalMode = defaultsDatabase.rawQuery("PRAGMA journal_mode", null).use { cursor ->
+                check(cursor.moveToFirst()) { "SQLite did not report its default journal mode" }
+                cursor.getString(0)
+            }
+            val defaultSynchronous = defaultsDatabase.rawQuery("PRAGMA synchronous", null).use { cursor ->
+                check(cursor.moveToFirst()) { "SQLite did not report its default synchronous mode" }
+                cursor.getInt(0)
+            }
+            assertEquals("TRUNCATE", defaultJournalMode.uppercase())
+            assertEquals(2, defaultSynchronous) // SQLite FULL
+        } finally {
+            defaultsDatabase.close()
+        }
+
+        // Verify the effective modes on the actual durable press journal connection.
+        val journalDatabase = journal.writableDatabase
+        val effectiveJournalMode = journalDatabase.rawQuery("PRAGMA journal_mode", null).use { cursor ->
+            check(cursor.moveToFirst()) { "Press journal did not report its journal mode" }
+            cursor.getString(0)
+        }
+        val effectiveSynchronous = journalDatabase.rawQuery("PRAGMA synchronous", null).use { cursor ->
+            check(cursor.moveToFirst()) { "Press journal did not report its synchronous mode" }
+            cursor.getInt(0)
+        }
+
+        assertEquals("TRUNCATE", effectiveJournalMode.uppercase())
+        assertEquals(2, effectiveSynchronous) // onConfigure must retain FULL durability
     }
 
     @Test
