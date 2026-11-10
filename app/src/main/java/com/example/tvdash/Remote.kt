@@ -246,8 +246,10 @@ class RemoteService : Service() {
     /** Shared by Wi-Fi and Bluetooth, with independent attempt histories for each client. */
     private val pinLimiter = PinAttemptLimiter()
 
-    /** Recently completed discrete presses; a retry after a lost HTTP response must not execute twice. */
-    private val completedPresses = ConcurrentHashMap<String, String>()
+    /** Durable request-ID journal shared by Wi-Fi and Bluetooth data-channel retries. */
+    private val pressJournal by lazy(LazyThreadSafetyMode.SYNCHRONIZED) {
+        DiscretePressJournal(this)
+    }
 
     /** Timestamp of the most recent completed Wi-Fi FF/REW hold, used to correlate the next Short OK. */
     @Volatile private var lastHeldSeekReleaseElapsedMs = 0L
