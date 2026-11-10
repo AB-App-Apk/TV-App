@@ -17,12 +17,16 @@ import java.security.cert.X509Certificate
 import javax.net.ssl.SSLServerSocket
 import javax.net.ssl.SSLSocket
 import kotlin.concurrent.thread
+import java.util.concurrent.atomic.AtomicReference
 
 class TvTlsTest {
     private val loopback: InetAddress = InetAddress.getLoopbackAddress()
 
     /** A tiny TLS server using the same context the TV uses: it answers one line with "echo:<line>". */
-    private fun echoServer(identity: TvTls.Identity): SSLServerSocket {
+    private fun echoServer(
+        identity: TvTls.Identity,
+        onPostHandshakeIoFailure: ((IOException) -> Unit)? = null
+    ): SSLServerSocket {
         val server = TvTls.serverContext(identity).serverSocketFactory.createServerSocket() as SSLServerSocket
         server.reuseAddress = true
         server.enabledProtocols = TvTls.enabledProtocols(server.supportedProtocols)
@@ -44,6 +48,7 @@ class TvTlsTest {
                         // A rejected client certificate/pin can terminate a handshake intentionally.
                         // Once the server handshake completes, expose I/O failures instead of hiding them.
                         if (serverHandshakeComplete) {
+                            onPostHandshakeIoFailure?.invoke(e)
                             System.err.println("TV_TLS_ECHO_SERVER_IO_FAILURE_BEGIN")
                             System.err.println("TV_TLS_ECHO_SERVER_PEER=${client.inetAddress.hostAddress}:${client.port}")
                             e.printStackTrace(System.err)
@@ -120,7 +125,8 @@ class TvTlsTest {
     @Test
     fun encryptedLinkWorksWhenThePinMatches() {
         val tv = TvTls.generate()
-        val server = echoServer(tv)
+        val serverFailure = AtomicReference<IOException?>(null)
+        val server = echoServer(tv) { serverFailure.set(it) }
         try {
             // Supply the peer host explicitly. Conscrypt's InetAddress overload reflectively
             // accesses InetAddress.holder(), which JDK 17 module boundaries prohibit.
@@ -143,7 +149,11 @@ class TvTlsTest {
                 assertTrue(it.session.protocol == "TLSv1.3" || it.session.protocol == "TLSv1.2")
                 it.getOutputStream().write("hello\n".toByteArray())
                 it.getOutputStream().flush()
-                assertEquals("echo:hello", it.getInputStream().bufferedReader().readLine())
+                val response = it.getInputStream().bufferedReader().readLine()
+                assertEquals(
+                    "echo:hello",
+                    response ?: "EOF from TLS echo server; serverFailure=${serverFailure.get()}"
+                )
             }
         } finally {
             server.close()
