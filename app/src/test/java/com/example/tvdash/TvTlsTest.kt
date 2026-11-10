@@ -17,28 +17,59 @@ import java.security.cert.X509Certificate
 import javax.net.ssl.SSLServerSocket
 import javax.net.ssl.SSLSocket
 import kotlin.concurrent.thread
+import java.util.concurrent.atomic.AtomicReference
 
 class TvTlsTest {
     private val loopback: InetAddress = InetAddress.getLoopbackAddress()
 
     /** A tiny TLS server using the same context the TV uses: it answers one line with "echo:<line>". */
-    private fun echoServer(identity: TvTls.Identity): SSLServerSocket {
+    private fun echoServer(
+        identity: TvTls.Identity,
+        onStage: ((String) -> Unit)? = null,
+        onFailure: ((Throwable) -> Unit)? = null
+    ): SSLServerSocket {
         val server = TvTls.serverContext(identity).serverSocketFactory.createServerSocket() as SSLServerSocket
         server.reuseAddress = true
         server.enabledProtocols = TvTls.enabledProtocols(server.supportedProtocols)
         server.bind(InetSocketAddress(loopback, 0))
+        onStage?.invoke("LISTENING")
         thread(isDaemon = true) {
             while (!server.isClosed) {
-                val client = try { server.accept() } catch (e: IOException) { break }
+                val client = try {
+                    server.accept()
+                } catch (e: IOException) {
+                    break
+                }
+                onStage?.invoke("ACCEPTED")
                 thread(isDaemon = true) {
+                    var serverHandshakeComplete = false
                     try {
                         client.soTimeout = 3_000
+                        onStage?.invoke("HANDSHAKE_BEGIN")
                         (client as SSLSocket).startHandshake()
+                        serverHandshakeComplete = true
+                        onStage?.invoke("HANDSHAKE_COMPLETE")
+                        onStage?.invoke("READ_BEGIN")
                         val line = client.getInputStream().bufferedReader().readLine()
+                        if (line == null) {
+                            onStage?.invoke("READ_EOF")
+                            throw IOException("TLS echo server received EOF before the client line")
+                        }
+                        onStage?.invoke("LINE_READ:${line.length}")
                         client.getOutputStream().write("echo:$line\n".toByteArray())
                         client.getOutputStream().flush()
-                    } catch (e: IOException) {
-                        // A failed handshake is an expected outcome in some tests.
+                        onStage?.invoke("RESPONSE_FLUSHED")
+                    } catch (failure: Throwable) {
+                        // Negative-pin tests intentionally terminate during the handshake.
+                        // The positive-pin test captures every worker failure for its assertion.
+                        onFailure?.invoke(failure)
+                        if (serverHandshakeComplete || failure !is IOException) {
+                            System.err.println("TV_TLS_ECHO_SERVER_FAILURE_BEGIN")
+                            System.err.println("TV_TLS_ECHO_SERVER_PEER=${client.inetAddress.hostAddress}:${client.port}")
+                            System.err.println("TV_TLS_ECHO_SERVER_HANDSHAKE_COMPLETE=$serverHandshakeComplete")
+                            failure.printStackTrace(System.err)
+                            System.err.println("TV_TLS_ECHO_SERVER_FAILURE_END")
+                        }
                     } finally {
                         runCatching { client.close() }
                     }
@@ -110,9 +141,17 @@ class TvTlsTest {
     @Test
     fun encryptedLinkWorksWhenThePinMatches() {
         val tv = TvTls.generate()
-        val server = echoServer(tv)
+        val serverFailure = AtomicReference<Throwable?>(null)
+        val serverState = AtomicReference("NOT_STARTED")
+        val server = echoServer(
+            tv,
+            onStage = { serverState.set(it) },
+            onFailure = { serverFailure.set(it) }
+        )
         try {
-            val socket = TvTls.pinnedSocketFactory(tv.fingerprint).createSocket(loopback, server.localPort) as SSLSocket
+            // Supply the peer host explicitly. Conscrypt's InetAddress overload reflectively
+            // accesses InetAddress.holder(), which JDK 17 module boundaries prohibit.
+            val socket = TvTls.pinnedSocketFactory(tv.fingerprint).createSocket(loopback.hostAddress, server.localPort) as SSLSocket
             socket.use {
                 it.soTimeout = 3_000
                 try {
@@ -131,7 +170,11 @@ class TvTlsTest {
                 assertTrue(it.session.protocol == "TLSv1.3" || it.session.protocol == "TLSv1.2")
                 it.getOutputStream().write("hello\n".toByteArray())
                 it.getOutputStream().flush()
-                assertEquals("echo:hello", it.getInputStream().bufferedReader().readLine())
+                val response = it.getInputStream().bufferedReader().readLine()
+                assertEquals(
+                    "echo:hello",
+                    response ?: "EOF from TLS echo server; serverState=${serverState.get()}; serverFailure=${serverFailure.get()}"
+                )
             }
         } finally {
             server.close()
@@ -144,7 +187,7 @@ class TvTlsTest {
         val verifiedEarlier = TvTls.generate()
         val server = echoServer(tv)
         try {
-            val socket = TvTls.pinnedSocketFactory(verifiedEarlier.fingerprint).createSocket(loopback, server.localPort) as SSLSocket
+            val socket = TvTls.pinnedSocketFactory(verifiedEarlier.fingerprint).createSocket(loopback.hostAddress, server.localPort) as SSLSocket
             socket.use {
                 it.soTimeout = 3_000
                 try {

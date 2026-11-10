@@ -540,6 +540,12 @@ class ConnectionManager(
                                             "The TV could not perform that button action. Try again."
                                         "bad-press" -> _hint.value =
                                             "The TV rejected the remote button request. Reconnect the remote."
+                                        com.example.tvlink.RemotePressProtocol.RESULT_UNCERTAIN -> _hint.value =
+                                            "The TV cannot confirm whether that button action completed. It will not repeat it automatically."
+                                        com.example.tvlink.RemotePressProtocol.RESULT_ID_CONFLICT -> _hint.value =
+                                            "The TV rejected a reused button request ID with different input."
+                                        com.example.tvlink.RemotePressProtocol.RESULT_JOURNAL_UNAVAILABLE -> _hint.value =
+                                            "The TV could not safely record this button request, so it was not sent."
                                         else -> _hint.value =
                                             "TV Dash returned an unexpected button result: ${reply.body.trim().take(80)}"
                                     }

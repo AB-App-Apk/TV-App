@@ -56,6 +56,11 @@ object RemotePressProtocol {
     const val ACTION_TAP = "tap"
     const val ACTION_LONG = "long"
 
+    /** Terminal wire outcomes for durable request-journal handling. */
+    const val RESULT_JOURNAL_UNAVAILABLE = "journal-unavailable"
+    const val RESULT_UNCERTAIN = "press-uncertain"
+    const val RESULT_ID_CONFLICT = "press-id-conflict"
+
     fun path(requestId: String, key: HeldRemoteKey, longPress: Boolean): String {
         require(HeldInputProtocol.isValidHoldId(requestId)) { "Invalid press request identifier" }
         require(key == HeldRemoteKey.BACK || key == HeldRemoteKey.OK) { "Only Back and OK have discrete press actions" }

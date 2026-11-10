@@ -42,7 +42,6 @@ import java.net.InetSocketAddress
 import java.net.ServerSocket
 import java.net.Socket
 import java.security.SecureRandom
-import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.ArrayBlockingQueue
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
@@ -247,8 +246,10 @@ class RemoteService : Service() {
     /** Shared by Wi-Fi and Bluetooth, with independent attempt histories for each client. */
     private val pinLimiter = PinAttemptLimiter()
 
-    /** Recently completed discrete presses; a retry after a lost HTTP response must not execute twice. */
-    private val completedPresses = ConcurrentHashMap<String, String>()
+    /** Durable request-ID journal shared by Wi-Fi and Bluetooth data-channel retries. */
+    private val pressJournal by lazy(LazyThreadSafetyMode.SYNCHRONIZED) {
+        DiscretePressJournal(this)
+    }
 
     /** Timestamp of the most recent completed Wi-Fi FF/REW hold, used to correlate the next Short OK. */
     @Volatile private var lastHeldSeekReleaseElapsedMs = 0L
@@ -521,22 +522,16 @@ class RemoteService : Service() {
      * Executes one phone-classified Back/OK gesture. The request id makes a repeated request idempotent
      * when the first response was lost during a Wi-Fi/Bluetooth carrier transition.
      */
-    @Synchronized
     private fun handleDiscretePress(id: String?, keyName: String?, action: String?): String {
         if (id == null || !com.example.tvlink.HeldInputProtocol.isValidHoldId(id)) return "bad-press"
-        completedPresses[id]?.let {
-            Log.i(
-                INPUT_TRACE_TAG,
-                "press-replay requestId=$id cachedResult=$it elapsedRealtimeMs=${android.os.SystemClock.elapsedRealtime()}"
-            )
-            return it
-        }
         val heldKey = com.example.tvlink.HeldRemoteKey.fromWire(keyName)
-        if (heldKey != com.example.tvlink.HeldRemoteKey.BACK && heldKey != com.example.tvlink.HeldRemoteKey.OK) return "bad-press"
+        if (heldKey != com.example.tvlink.HeldRemoteKey.BACK && heldKey != com.example.tvlink.HeldRemoteKey.OK) {
+            return "bad-press"
+        }
         if (action != com.example.tvlink.RemotePressProtocol.ACTION_TAP &&
-            action != com.example.tvlink.RemotePressProtocol.ACTION_LONG) return "bad-press"
+            action != com.example.tvlink.RemotePressProtocol.ACTION_LONG
+        ) return "bad-press"
 
-        val longPress = action == com.example.tvlink.RemotePressProtocol.ACTION_LONG
         val receivedElapsedMs = android.os.SystemClock.elapsedRealtime()
         val seekAgeAtReceiveMs = sinceLastSeekReleaseMs(receivedElapsedMs)?.toString() ?: "unknown"
         Log.i(
@@ -544,36 +539,41 @@ class RemoteService : Service() {
             "press-request key=${heldKey.wireName} action=$action requestId=$id " +
                 "elapsedRealtimeMs=$receivedElapsedMs sinceLastSeekReleaseMs=$seekAgeAtReceiveMs"
         )
-        val result = when (heldKey) {
-            com.example.tvlink.HeldRemoteKey.BACK -> {
-                // There is no generic Accessibility global LONG_BACK action. Long Back is deliberately mapped to Home.
-                key(if (longPress) "home" else "back")
-            }
-            com.example.tvlink.HeldRemoteKey.OK -> {
-                val service = PowerAccessibilityService.instance
-                when {
-                    service == null -> "no-a11y"
-                    longPress -> DiscretePressDispatch.longOk {
-                        service.performLongOkResult()
-                    }.wireValue
-                    else -> DiscretePressDispatch.shortOk(
-                        dpadCenter = {
-                            val performed = service.performGlobalAction(AccessibilityService.GLOBAL_ACTION_DPAD_CENTER)
-                            val dpadElapsedMs = android.os.SystemClock.elapsedRealtime()
-                            val seekAgeAtDpadMs = sinceLastSeekReleaseMs(dpadElapsedMs)?.toString() ?: "unknown"
-                            Log.i(
-                                INPUT_TRACE_TAG,
-                                "short-ok-dpad-center performed=$performed elapsedRealtimeMs=$dpadElapsedMs " +
-                                    "sinceLastSeekReleaseMs=$seekAgeAtDpadMs"
-                            )
-                            performed
-                        },
-                        focusedClick = { service.performFocusedClick() }
-                    ).wireValue
+
+        val result = pressJournal.executeOnce(id, heldKey.wireName, action) {
+            val longPress = action == com.example.tvlink.RemotePressProtocol.ACTION_LONG
+            when (heldKey) {
+                com.example.tvlink.HeldRemoteKey.BACK -> {
+                    // There is no generic Accessibility global LONG_BACK action. Long Back is deliberately mapped to Home.
+                    key(if (longPress) "home" else "back")
                 }
+                com.example.tvlink.HeldRemoteKey.OK -> {
+                    val service = PowerAccessibilityService.instance
+                    when {
+                        service == null -> "no-a11y"
+                        longPress -> DiscretePressDispatch.longOk {
+                            service.performLongOkResult()
+                        }.wireValue
+                        else -> DiscretePressDispatch.shortOk(
+                            dpadCenter = {
+                                val performed = service.performGlobalAction(AccessibilityService.GLOBAL_ACTION_DPAD_CENTER)
+                                val dpadElapsedMs = android.os.SystemClock.elapsedRealtime()
+                                val seekAgeAtDpadMs = sinceLastSeekReleaseMs(dpadElapsedMs)?.toString() ?: "unknown"
+                                Log.i(
+                                    INPUT_TRACE_TAG,
+                                    "short-ok-dpad-center performed=$performed elapsedRealtimeMs=$dpadElapsedMs " +
+                                        "sinceLastSeekReleaseMs=$seekAgeAtDpadMs"
+                                )
+                                performed
+                            },
+                            focusedClick = { service.performFocusedClick() }
+                        ).wireValue
+                    }
+                }
+                else -> "bad-press"
             }
-            else -> "bad-press"
         }
+
         val resultElapsedMs = android.os.SystemClock.elapsedRealtime()
         val seekAgeAtResultMs = sinceLastSeekReleaseMs(resultElapsedMs)?.toString() ?: "unknown"
         Log.i(
@@ -581,10 +581,6 @@ class RemoteService : Service() {
             "press-result key=${heldKey.wireName} action=$action result=$result requestId=$id " +
                 "elapsedRealtimeMs=$resultElapsedMs sinceLastSeekReleaseMs=$seekAgeAtResultMs"
         )
-        completedPresses[id] = result
-        if (completedPresses.size > 256) {
-            completedPresses.keys.firstOrNull { it != id }?.let { completedPresses.remove(it) }
-        }
         return result
     }
 

@@ -43,6 +43,18 @@ android {
         }
     }
     buildFeatures { compose = true }
+    testOptions {
+        unitTests.isIncludeAndroidResources = true
+        unitTests.all {
+            // Conscrypt's JVM test server may inspect InetAddress.holder() during TLS accept/handshake.
+            // Open only this JDK package in the forked unit-test JVM; Android production processes are unaffected.
+            it.jvmArgs("--add-opens=java.base/java.net=ALL-UNNAMED")
+            it.testLogging {
+                events("failed", "standardOut", "standardError")
+                exceptionFormat = org.gradle.api.tasks.testing.logging.TestExceptionFormat.FULL
+            }
+        }
+    }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
@@ -52,6 +64,7 @@ android {
 
 dependencies {
     testImplementation("junit:junit:4.13.2")
+    testImplementation("org.robolectric:robolectric:4.14.1")
     implementation(platform("androidx.compose:compose-bom:2024.09.02"))
     implementation("androidx.compose.ui:ui")
     implementation("androidx.compose.foundation:foundation")
