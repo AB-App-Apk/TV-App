@@ -115,7 +115,19 @@ class TvTlsTest {
             val socket = TvTls.pinnedSocketFactory(tv.fingerprint).createSocket(loopback, server.localPort) as SSLSocket
             socket.use {
                 it.soTimeout = 3_000
-                it.startHandshake()
+                try {
+                    it.startHandshake()
+                } catch (failure: Exception) {
+                    System.err.println("TV_TLS_HANDSHAKE_FAILURE_BEGIN")
+                    System.err.println("TV_TLS_CLIENT_SUPPORTED_PROTOCOLS=${it.supportedProtocols.joinToString(",")}")
+                    System.err.println("TV_TLS_CLIENT_ENABLED_PROTOCOLS=${it.enabledProtocols.joinToString(",")}")
+                    java.security.Security.getProviders().forEach { provider ->
+                        System.err.println("TV_TLS_JCA_PROVIDER=${provider.name} INFO=${provider.info}")
+                    }
+                    failure.printStackTrace(System.err)
+                    System.err.println("TV_TLS_HANDSHAKE_FAILURE_END")
+                    throw failure
+                }
                 assertTrue(it.session.protocol == "TLSv1.3" || it.session.protocol == "TLSv1.2")
                 it.getOutputStream().write("hello\n".toByteArray())
                 it.getOutputStream().flush()
