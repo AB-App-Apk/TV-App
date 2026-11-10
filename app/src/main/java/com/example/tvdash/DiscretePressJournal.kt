@@ -204,9 +204,20 @@ internal class DiscretePressJournal(
     override fun onConfigure(db: SQLiteDatabase) {
         super.onConfigure(db)
         db.setForeignKeyConstraintsEnabled(true)
-        // Rollback journal + FULL synchronous commit: persist each state transition before returning.
-        db.execSQL("PRAGMA synchronous=FULL")
-        db.execSQL("PRAGMA busy_timeout=5000")
+
+        // Both PRAGMAs return a row. Consume their cursors; execSQL is only for statements with no result set.
+        // Android SQLite defaults to rollback-journal mode because WAL is never enabled for this helper.
+        val synchronous = db.rawQuery("PRAGMA synchronous=FULL", null).use { cursor ->
+            check(cursor.moveToFirst()) { "SQLite did not report its synchronous mode" }
+            cursor.getInt(0)
+        }
+        check(synchronous == 2) { "SQLite synchronous mode is not FULL: $synchronous" }
+
+        val busyTimeout = db.rawQuery("PRAGMA busy_timeout=5000", null).use { cursor ->
+            check(cursor.moveToFirst()) { "SQLite did not report its busy timeout" }
+            cursor.getInt(0)
+        }
+        check(busyTimeout == 5_000) { "SQLite busy timeout was not applied: $busyTimeout" }
     }
 
     override fun onCreate(db: SQLiteDatabase) {
