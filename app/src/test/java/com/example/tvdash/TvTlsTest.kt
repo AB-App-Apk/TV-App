@@ -31,14 +31,24 @@ class TvTlsTest {
             while (!server.isClosed) {
                 val client = try { server.accept() } catch (e: IOException) { break }
                 thread(isDaemon = true) {
+                    var serverHandshakeComplete = false
                     try {
                         client.soTimeout = 3_000
                         (client as SSLSocket).startHandshake()
+                        serverHandshakeComplete = true
                         val line = client.getInputStream().bufferedReader().readLine()
+                            ?: throw IOException("TLS echo server received EOF before the client line")
                         client.getOutputStream().write("echo:$line\n".toByteArray())
                         client.getOutputStream().flush()
                     } catch (e: IOException) {
-                        // A failed handshake is an expected outcome in some tests.
+                        // A rejected client certificate/pin can terminate a handshake intentionally.
+                        // Once the server handshake completes, expose I/O failures instead of hiding them.
+                        if (serverHandshakeComplete) {
+                            System.err.println("TV_TLS_ECHO_SERVER_IO_FAILURE_BEGIN")
+                            System.err.println("TV_TLS_ECHO_SERVER_PEER=${client.inetAddress.hostAddress}:${client.port}")
+                            e.printStackTrace(System.err)
+                            System.err.println("TV_TLS_ECHO_SERVER_IO_FAILURE_END")
+                        }
                     } finally {
                         runCatching { client.close() }
                     }
