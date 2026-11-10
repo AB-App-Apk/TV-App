@@ -112,7 +112,9 @@ class TvTlsTest {
         val tv = TvTls.generate()
         val server = echoServer(tv)
         try {
-            val socket = TvTls.pinnedSocketFactory(tv.fingerprint).createSocket(loopback, server.localPort) as SSLSocket
+            // Supply the peer host explicitly. Conscrypt's InetAddress overload reflectively
+            // accesses InetAddress.holder(), which JDK 17 module boundaries prohibit.
+            val socket = TvTls.pinnedSocketFactory(tv.fingerprint).createSocket(loopback.hostAddress, server.localPort) as SSLSocket
             socket.use {
                 it.soTimeout = 3_000
                 try {
@@ -144,7 +146,7 @@ class TvTlsTest {
         val verifiedEarlier = TvTls.generate()
         val server = echoServer(tv)
         try {
-            val socket = TvTls.pinnedSocketFactory(verifiedEarlier.fingerprint).createSocket(loopback, server.localPort) as SSLSocket
+            val socket = TvTls.pinnedSocketFactory(verifiedEarlier.fingerprint).createSocket(loopback.hostAddress, server.localPort) as SSLSocket
             socket.use {
                 it.soTimeout = 3_000
                 try {
