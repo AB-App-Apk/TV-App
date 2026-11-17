@@ -146,21 +146,60 @@ class PowerAccessibilityService : AccessibilityService() {
      */
     internal fun performLongOkResult(): DiscretePressResult {
         val activePackage = activeWindowPackageName()
-        if (activePackage in YOUTUBE_PACKAGES) {
+        val youtubeRoute = activePackage in YOUTUBE_PACKAGES
+
+        A11yDiagnostics.recordEvent(
+            this,
+            "long-ok-route",
+            "package=${activePackage ?: "unknown"} route=${if (youtubeRoute) "uinput" else "accessibility"}"
+        )
+
+        if (youtubeRoute) {
             Log.i(TAG, "long-ok route=uinput-key-enter package=$activePackage")
-            return when (UinputEnterHold.dispatch(this)) {
+            val nativeResult = UinputEnterHold.dispatch(this)
+
+            A11yDiagnostics.recordEvent(
+                this,
+                "long-ok-native",
+                "result=${nativeResult.name}"
+            )
+
+            return when (nativeResult) {
                 UinputEnterHold.Result.SENT -> DiscretePressResult.SUCCESS
-                UinputEnterHold.Result.UNAVAILABLE -> performFocusedAccessibilityLongClickResult()
+
+                UinputEnterHold.Result.UNAVAILABLE ->
+                    performAndRecordLongClickFallback("native-unavailable")
+
                 UinputEnterHold.Result.UNCERTAIN -> {
-                    Log.e(TAG, "long-ok uinput result uncertain; refusing fallback to prevent duplicate action")
+                    A11yDiagnostics.recordEvent(
+                        this,
+                        "long-ok-fallback",
+                        "native=uncertain fallback=refused"
+                    )
+                    Log.e(
+                        TAG,
+                        "long-ok uinput result uncertain; refusing fallback to prevent duplicate action"
+                    )
                     DiscretePressResult.ACTION_FAILED
                 }
             }
         }
 
-        // Preserve ordinary app behavior without using touch.
-        Log.i(TAG, "long-ok route=accessibility package=${activePackage ?: "unknown"}")
-        return performFocusedAccessibilityLongClickResult()
+        Log.i(
+            TAG,
+            "long-ok route=accessibility package=${activePackage ?: "unknown"}"
+        )
+        return performAndRecordLongClickFallback("non-youtube")
+    }
+
+    private fun performAndRecordLongClickFallback(reason: String): DiscretePressResult {
+        val result = performFocusedAccessibilityLongClickResult()
+        A11yDiagnostics.recordEvent(
+            this,
+            "long-ok-fallback",
+            "reason=$reason result=${result.wireValue}"
+        )
+        return result
     }
 
     /** Returns the foreground accessibility window's package without assuming it is touch-capable. */
@@ -190,6 +229,11 @@ class PowerAccessibilityService : AccessibilityService() {
         return try {
             val focused = findFocusedNode()
                 ?: run {
+                    A11yDiagnostics.recordEvent(
+                        this,
+                        "long-ok-target",
+                        "result=no-focus"
+                    )
                     Log.w(TAG, "long-ok accessibility fallback found no focused node")
                     return DiscretePressResult.NO_FOCUS
                 }
@@ -200,14 +244,41 @@ class PowerAccessibilityService : AccessibilityService() {
                 focused.actionList.any { it.id == longClickId }
 
             if (!supported) {
-                Log.i(TAG, "long-ok accessibility fallback unsupported package=${focused.packageName} class=${focused.className}")
+                A11yDiagnostics.recordEvent(
+                    this,
+                    "long-ok-target",
+                    "result=no-long-click package=${focused.packageName} class=${focused.className}"
+                )
+                Log.i(
+                    TAG,
+                    "long-ok accessibility fallback unsupported package=${focused.packageName} class=${focused.className}"
+                )
                 return DiscretePressResult.LONG_CLICK_UNSUPPORTED
             }
 
             val performed = focused.performAction(AccessibilityNodeInfo.ACTION_LONG_CLICK)
-            Log.i(TAG, "long-ok ACTION_LONG_CLICK package=${focused.packageName} class=${focused.className} performed=$performed")
-            if (performed) DiscretePressResult.SUCCESS else DiscretePressResult.ACTION_FAILED
+            val result = if (performed) {
+                DiscretePressResult.SUCCESS
+            } else {
+                DiscretePressResult.ACTION_FAILED
+            }
+
+            A11yDiagnostics.recordEvent(
+                this,
+                "long-ok-target",
+                "result=${result.wireValue} performed=$performed package=${focused.packageName} class=${focused.className}"
+            )
+            Log.i(
+                TAG,
+                "long-ok ACTION_LONG_CLICK package=${focused.packageName} class=${focused.className} performed=$performed"
+            )
+            result
         } catch (t: Throwable) {
+            A11yDiagnostics.recordEvent(
+                this,
+                "long-ok-target",
+                "exception=${t.javaClass.name} message=${t.message ?: "no-message"}"
+            )
             Log.w(TAG, "long-ok accessibility fallback failed", t)
             DiscretePressResult.ACTION_FAILED
         }
@@ -217,6 +288,16 @@ class PowerAccessibilityService : AccessibilityService() {
     private fun logLongOkTarget(node: AccessibilityNodeInfo) {
         val bounds = Rect()
         node.getBoundsInScreen(bounds)
+
+        A11yDiagnostics.recordEvent(
+            this,
+            "long-ok-target",
+            "package=${node.packageName} class=${node.className} " +
+                "focused=${node.isFocused} accessibilityFocused=${node.isAccessibilityFocused} " +
+                "visible=${node.isVisibleToUser} clickable=${node.isClickable} " +
+                "longClickable=${node.isLongClickable}"
+        )
+
         Log.i(
             TAG,
             "long-ok target package=${node.packageName} class=${node.className} " +
