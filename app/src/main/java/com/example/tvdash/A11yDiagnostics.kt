@@ -24,6 +24,7 @@ object A11yDiagnostics {
     private const val EVENTS_PREFS = "a11y_diagnostics"
     private const val EVENTS_KEY = "recent_events"
     private const val MAX_EVENTS = 10
+    private const val MAX_EVENT_DETAIL_CHARS = 512
     private val eventLock = Any()
 
     fun summary(ctx: Context): String = listOf(
@@ -51,7 +52,9 @@ object A11yDiagnostics {
                 }.getOrDefault(JSONArray())
                 val now = System.currentTimeMillis()
                 val last = old.optJSONObject(old.length() - 1)
-                val cleanDetail = detail.replace(Regex("\\s+"), " ").take(120)
+                val cleanDetail = detail
+                    .replace(Regex("\\s+"), " ")
+                    .take(MAX_EVENT_DETAIL_CHARS)
 
                 // Avoid filling the short trail with the same rapidly repeating listener error.
                 if (last != null &&
