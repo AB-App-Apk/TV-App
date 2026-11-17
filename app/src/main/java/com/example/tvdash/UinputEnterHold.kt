@@ -53,6 +53,11 @@ internal object UinputEnterHold {
     @Synchronized
     fun dispatch(context: Context): Result {
         if (nativeDispatchQuarantined) {
+            A11yDiagnostics.recordEvent(
+                context,
+                "uinput-blocked",
+                "reason=in-memory-quarantine"
+            )
             Log.e(TAG, "native dispatch quarantined after a previous uncertain process outcome")
             return Result.UNCERTAIN
         }
@@ -60,6 +65,11 @@ internal object UinputEnterHold {
         val appContext = context.applicationContext
         val quarantineFile = File(appContext.noBackupFilesDir, "$BINARY_NAME.quarantine")
         if (nativeDispatchQuarantined || quarantineFile.exists()) {
+            A11yDiagnostics.recordEvent(
+                appContext,
+                "uinput-blocked",
+                "reason=durable-quarantine"
+            )
             nativeDispatchQuarantined = true
             Log.e(TAG, "durable native dispatch quarantine exists; refusing another root launch")
             return Result.UNCERTAIN
@@ -77,6 +87,11 @@ internal object UinputEnterHold {
             }
         } catch (e: Exception) {
             nativeDispatchQuarantined = true
+            A11yDiagnostics.recordEvent(
+                appContext,
+                "uinput-quarantine-failed",
+                "exception=${e.javaClass.name} message=${e.message ?: "no-message"}"
+            )
             Log.e(TAG, "could not persist native dispatch quarantine; refusing root launch", e)
             return Result.UNCERTAIN
         }
@@ -93,14 +108,30 @@ internal object UinputEnterHold {
         } catch (e: Exception) {
             val markerRemoved = runCatching { quarantineFile.delete() }.getOrDefault(false)
             nativeDispatchQuarantined = !markerRemoved
+            A11yDiagnostics.recordEvent(
+                appContext,
+                "uinput-launch-failed",
+                "exception=${e.javaClass.name} message=${e.message ?: "no-message"} markerRemoved=$markerRemoved"
+            )
             Log.w(TAG, "native process could not be started; quarantineRemoved=$markerRemoved", e)
             return if (markerRemoved) Result.UNAVAILABLE else Result.UNCERTAIN
         }
+
+        A11yDiagnostics.recordEvent(
+            appContext,
+            "uinput-process-started",
+            "result=started"
+        )
 
         try {
             if (!process.waitFor(PROCESS_TIMEOUT_MS, TimeUnit.MILLISECONDS)) {
                 val terminated = terminateProcess(process)
                 nativeDispatchQuarantined = true
+                A11yDiagnostics.recordEvent(
+                    appContext,
+                    "uinput-result",
+                    "result=UNCERTAIN reason=process-timeout terminationConfirmed=$terminated"
+                )
                 Log.e(
                     TAG,
                     "native process timed out; result=UNCERTAIN terminationConfirmed=$terminated; fallback prohibited"
@@ -112,21 +143,41 @@ internal object UinputEnterHold {
             val output = readNativeOutput(outputFile)
             if (output == null) {
                 nativeDispatchQuarantined = true
+                A11yDiagnostics.recordEvent(
+                    appContext,
+                    "uinput-result",
+                    "result=UNCERTAIN reason=native-output-missing"
+                )
                 Log.e(TAG, "native process exited but telemetry was missing or incomplete; result=UNCERTAIN")
                 return Result.UNCERTAIN
             }
 
             logNativeOutput(output)
             val result = auditResult(exitCode, output)
+            A11yDiagnostics.recordEvent(
+                appContext,
+                "uinput-result",
+                "result=$result exitCode=$exitCode"
+            )
             if (result == Result.SENT) {
                 val markerRemoved = runCatching { quarantineFile.delete() }.getOrDefault(false)
                 if (!markerRemoved) {
                     nativeDispatchQuarantined = true
+                    A11yDiagnostics.recordEvent(
+                        appContext,
+                        "uinput-quarantine-remove-failed",
+                        "result=UNCERTAIN reason=marker-delete-failed"
+                    )
                     Log.e(TAG, "successful native sequence but quarantine marker removal failed; result=UNCERTAIN")
                     return Result.UNCERTAIN
                 }
             } else {
                 nativeDispatchQuarantined = true
+                A11yDiagnostics.recordEvent(
+                    appContext,
+                    "uinput-quarantined",
+                    "reason=native-lifecycle-audit-failed exitCode=$exitCode"
+                )
                 Log.e(TAG, "native process outcome failed lifecycle audit; durable dispatch quarantine retained")
             }
             Log.i(TAG, "dispatch result=$result exitCode=$exitCode")
@@ -134,6 +185,11 @@ internal object UinputEnterHold {
         } catch (e: InterruptedException) {
             val terminated = terminateProcess(process)
             nativeDispatchQuarantined = true
+            A11yDiagnostics.recordEvent(
+                appContext,
+                "uinput-result",
+                "result=UNCERTAIN reason=wait-interrupted terminationConfirmed=$terminated"
+            )
             Thread.currentThread().interrupt()
             Log.w(
                 TAG,
@@ -144,6 +200,11 @@ internal object UinputEnterHold {
         } catch (e: Exception) {
             val terminated = terminateProcess(process)
             nativeDispatchQuarantined = true
+            A11yDiagnostics.recordEvent(
+                appContext,
+                "uinput-result",
+                "result=UNCERTAIN reason=post-start-exception exception=${e.javaClass.name} message=${e.message ?: "no-message"} terminationConfirmed=$terminated"
+            )
             Log.w(
                 TAG,
                 "native process started but dispatch/telemetry failed; result=UNCERTAIN terminationConfirmed=$terminated",
@@ -155,15 +216,53 @@ internal object UinputEnterHold {
             if (process.isAlive) {
                 nativeDispatchQuarantined = true
                 val terminated = terminateProcess(process)
+                A11yDiagnostics.recordEvent(
+                    appContext,
+                    "uinput-result",
+                    "result=UNCERTAIN reason=final-process-guard terminationConfirmed=$terminated"
+                )
                 Log.e(TAG, "final process guard terminationConfirmed=$terminated")
             }
             runCatching { process.inputStream.close() }
             runCatching { process.errorStream.close() }
             runCatching { process.outputStream.close() }
             if (outputFile.exists() && !outputFile.delete()) {
+                A11yDiagnostics.recordEvent(
+                    appContext,
+                    "uinput-output-cleanup",
+                    "result=failed reason=temporary-output-delete-failed"
+                )
                 Log.w(TAG, "could not delete temporary native telemetry file")
             }
         }
+    }
+
+    private fun stagingUnavailable(
+        context: Context,
+        reason: String,
+        error: Exception? = null
+    ): File? {
+        val detail = buildString {
+            append("reason=").append(reason)
+            if (error != null) {
+                append(" exception=").append(error.javaClass.name)
+                append(" message=").append(error.message ?: "no-message")
+            }
+        }
+
+        A11yDiagnostics.recordEvent(
+            context,
+            "uinput-stage-failed",
+            detail
+        )
+
+        if (error == null) {
+            Log.e(TAG, "native staging unavailable: $detail")
+        } else {
+            Log.e(TAG, "native staging unavailable: $detail", error)
+        }
+
+        return null
     }
 
     /**
@@ -172,8 +271,10 @@ internal object UinputEnterHold {
      */
     private fun installAndVerify(context: Context): File? {
         if (!Build.SUPPORTED_32_BIT_ABIS.contains(ABI)) {
-            Log.w(TAG, "native ABI unavailable; supported32BitAbis=${Build.SUPPORTED_32_BIT_ABIS.joinToString()}")
-            return null
+            return stagingUnavailable(
+                context,
+                "abi-unsupported supported=${Build.SUPPORTED_32_BIT_ABIS.joinToString()}"
+            )
         }
 
         return try {
@@ -181,20 +282,23 @@ internal object UinputEnterHold {
                 reader.readLine()?.trim()?.split(Regex("\\s+"))?.firstOrNull()
             }
             if (expected == null || !expected.matches(Regex("[0-9a-fA-F]{64}"))) {
-                Log.e(TAG, "native asset manifest is missing or malformed")
-                return null
+                return stagingUnavailable(context, "manifest-missing-or-malformed")
             }
 
             val directory = File(context.noBackupFilesDir, "native")
             if (!directory.isDirectory && !directory.mkdirs()) {
-                Log.e(TAG, "could not create native executable directory")
-                return null
+                return stagingUnavailable(context, "native-directory-create-failed")
             }
 
             val destination = File(directory, BINARY_NAME)
             if (destination.isFile && destination.canExecute() &&
                 sha256(destination).equals(expected, ignoreCase = true)
             ) {
+                A11yDiagnostics.recordEvent(
+                    context,
+                    "uinput-stage",
+                    "result=verified-cache"
+                )
                 return destination
             }
 
@@ -206,23 +310,22 @@ internal object UinputEnterHold {
 
                 val actual = sha256(temporary)
                 if (!actual.equals(expected, ignoreCase = true)) {
-                    Log.e(TAG, "native asset SHA-256 mismatch expected=$expected actual=$actual")
-                    return null
+                    return stagingUnavailable(
+                        context,
+                        "asset-hash-mismatch expected=$expected actual=$actual"
+                    )
                 }
                 if (!temporary.setReadable(true, true) ||
                     !temporary.setWritable(true, true) ||
                     !temporary.setExecutable(true, true)
                 ) {
-                    Log.e(TAG, "could not set owner-only executable permissions on native asset")
-                    return null
+                    return stagingUnavailable(context, "owner-executable-permissions-failed")
                 }
                 if (destination.exists() && !destination.delete()) {
-                    Log.e(TAG, "could not replace stale native executable")
-                    return null
+                    return stagingUnavailable(context, "stale-destination-delete-failed")
                 }
                 if (!temporary.renameTo(destination)) {
-                    Log.e(TAG, "could not atomically install native executable")
-                    return null
+                    return stagingUnavailable(context, "atomic-rename-failed")
                 }
             } finally {
                 if (temporary.exists()) temporary.delete()
@@ -231,14 +334,18 @@ internal object UinputEnterHold {
             if (!destination.isFile || !destination.canExecute() ||
                 !sha256(destination).equals(expected, ignoreCase = true)
             ) {
-                Log.e(TAG, "installed native executable failed post-install verification")
-                return null
+                return stagingUnavailable(context, "post-install-verification-failed")
             }
+
+            A11yDiagnostics.recordEvent(
+                context,
+                "uinput-stage",
+                "result=installed-verified"
+            )
             Log.i(TAG, "native executable installed and SHA-256 verified")
             destination
         } catch (e: Exception) {
-            Log.w(TAG, "native executable staging failed", e)
-            null
+            stagingUnavailable(context, "staging-exception", e)
         }
     }
 
